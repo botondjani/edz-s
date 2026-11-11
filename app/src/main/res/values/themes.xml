@@ -1,0 +1,4 @@
+<resources>
+    <style name="Theme.Edzes" parent="android:Theme.Material.Light.NoActionBar" />
+    <color name="launcher_bg">#1B5E20</color>
+</resources>
