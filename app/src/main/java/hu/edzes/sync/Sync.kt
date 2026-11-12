@@ -11,6 +11,8 @@ import hu.edzes.data.DONE
 import hu.edzes.data.EdzesDao
 import hu.edzes.data.SKIPPED
 import hu.edzes.data.SetLog
+import hu.edzes.data.Tracks
+import hu.edzes.model.fmtMeters
 import hu.edzes.model.fmtKg
 import hu.edzes.model.fmtSecs
 import hu.edzes.model.sportGroup
@@ -47,12 +49,15 @@ fun planStrava(local: List<Activity>, remote: List<StravaActivity>): StravaPlan 
 fun describe(logs: List<SetLog>): String = logs.groupBy { it.exercise }.entries.joinToString("\n") { (exercise, sets) ->
     "$exercise: " + sets.joinToString(", ") { s ->
         when {
+            s.distanceM != null && s.durationS != null -> "${fmtMeters(s.distanceM.toInt())} ${clock(s.durationS)}"
             s.durationS != null -> fmtSecs(s.durationS)
             s.weightKg != null -> "${s.reps}×${fmtKg(s.weightKg)}"
             else -> "${s.reps} ism."
         }
     }
 }
+
+private fun clock(s: Int) = "%d:%02d".format(s / 60, s % 60)
 
 /** A tevékenységet a napi, azonos sportú, még nem párosított tervhez köti. */
 suspend fun matchPlan(dao: EdzesDao, a: Activity) {
@@ -161,12 +166,15 @@ object Sync {
      * Ha az útvonalhoz még engedély kell, megjelöli az edzést és false-t ad vissza.
      * Hálózati hibánál IOException-t dob (később újrapróbálható).
      */
-    suspend fun upload(ctx: Context, activity: Activity, route: ExerciseRoute? = null, routeDenied: Boolean = false): Boolean {
+    suspend fun upload(
+        ctx: Context, activity: Activity, route: ExerciseRoute? = null, routeDenied: Boolean = false, force: Boolean = false,
+    ): Boolean {
         val dao = ctx.dao
         var a = activity
         try {
+            val hcOk = Hc.available(ctx) && runCatching { Hc(ctx).granted() }.getOrDefault(false)
             val points = try {
-                trackPoints(ctx, a, route, routeDenied)
+                trackPoints(ctx, a, route, routeDenied, hcOk)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -177,6 +185,9 @@ object Sync {
                 dao.update(a.copy(needsRoute = true))
                 return false
             }
+            // Az appban mért edzéshez az óra pulzusa késve érkezik a Health Connectbe: fél óráig várunk rá.
+            val endMs = a.startMs + a.durationS * 1000L
+            if (!force && a.source == "app" && hcOk && points.none { it.hr != null } && System.currentTimeMillis() - endMs < 30 * 60_000) return false
             a = a.copy(needsRoute = false)
             val description = describe(dao.setLogs(a.id))
             val strava = Strava(ctx)
@@ -190,19 +201,19 @@ object Sync {
         }
     }
 
-    /** null = az útvonal olvasásához a felhasználó engedélye kell. */
-    private suspend fun trackPoints(ctx: Context, a: Activity, given: ExerciseRoute?, routeDenied: Boolean): List<TrackPoint>? {
-        if (!Hc.available(ctx)) return emptyList()
+    /** Az appban rögzített útvonal, kiegészítve a Health Connect adataival. null = az útvonalhoz a felhasználó engedélye kell. */
+    private suspend fun trackPoints(ctx: Context, a: Activity, given: ExerciseRoute?, routeDenied: Boolean, hcOk: Boolean): List<TrackPoint>? {
+        val local = Tracks.read(ctx, a.id)
+        if (!hcOk || local.any { it.hr != null }) return local
         val hc = Hc(ctx)
-        if (!hc.granted()) return emptyList()
         var route = given
-        if (route == null && a.hcId != null && !routeDenied) when (val r = hc.route(a.hcId)) {
+        if (local.isEmpty() && route == null && a.hcId != null && !routeDenied) when (val r = hc.route(a.hcId)) {
             is ExerciseRouteResult.Data -> route = r.exerciseRoute
             is ExerciseRouteResult.ConsentRequired -> return null
             else -> {}
         }
-        val gps = route?.route.orEmpty().map {
-            TrackPoint(it.time.toEpochMilli(), it.latitude, it.longitude, it.altitude?.inMeters)
+        val gps = local.ifEmpty {
+            route?.route.orEmpty().map { TrackPoint(it.time.toEpochMilli(), it.latitude, it.longitude, it.altitude?.inMeters) }
         }
         return mergePoints(gps, hc.heartRates(a.startMs, a.startMs + a.durationS * 1000L))
     }

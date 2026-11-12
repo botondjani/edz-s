@@ -46,7 +46,10 @@ import hu.edzes.data.PLANNED
 import hu.edzes.data.Planned
 import hu.edzes.data.SKIPPED
 import hu.edzes.model.Workout
+import hu.edzes.model.isCardio
 import hu.edzes.model.sportEmoji
+import hu.edzes.player.HeartRateMonitor
+import hu.edzes.prefs
 import hu.edzes.model.steps
 import hu.edzes.model.summary
 import hu.edzes.player.Player
@@ -75,6 +78,13 @@ fun fmtClock(totalS: Long): String {
 
 fun fmtKm(m: Double): String = "%.2f km".format(HU, m / 1000)
 
+/** Tempó (mp/km) a sportnak megfelelően: futásnál perc/km, kerékpárnál km/h. */
+fun fmtPace(sPerKm: Int?, sport: String): String = when {
+    sPerKm == null || sPerKm <= 0 -> "–"
+    sport == "bike" -> "%.1f".format(HU, 3600.0 / sPerKm)
+    else -> fmtClock(sPerKm.toLong())
+}
+
 fun Context.toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_LONG).show()
 
 fun Planned.workout(): Workout = Json.decodeFromString(workoutJson)
@@ -87,7 +97,7 @@ fun rememberData(): Pair<List<Planned>, List<Activity>> {
     return planned to activities.filter { !it.hidden }
 }
 
-/** Edzésindító, ami előbb elkéri a szükséges engedélyeket (értesítés; táv alapú szakaszokhoz helymeghatározás). */
+/** Edzésindító, ami előbb elkéri a szükséges engedélyeket (értesítés; kardióhoz GPS; élő pulzushoz Bluetooth). */
 @Composable
 fun rememberStarter(): (Workout, Long?) -> Unit {
     val ctx = LocalContext.current
@@ -99,8 +109,9 @@ fun rememberStarter(): (Workout, Long?) -> Unit {
     return { workout, plannedId ->
         val missing = buildList {
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
-            if (workout.steps().any { it.distanceM != null }) add(Manifest.permission.ACCESS_FINE_LOCATION)
-        }.filter { ctx.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            if (isCardio(workout.sport) || workout.steps().any { it.distanceM != null }) add(Manifest.permission.ACCESS_FINE_LOCATION)
+            if (ctx.prefs.getBoolean("live_hr", true)) addAll(HeartRateMonitor.PERMISSIONS)
+        }.distinct().filter { ctx.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isEmpty()) Player.start(ctx, workout, plannedId)
         else { pending = workout to plannedId; launcher.launch(missing.toTypedArray()) }
     }
@@ -149,7 +160,8 @@ fun PlannedCard(p: Planned, onStart: (Workout, Long?) -> Unit, showDate: Boolean
             workout.notes?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             workout.summary().forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
             if (p.status == PLANNED) Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (workout.blocks.isNotEmpty()) TextButton(onClick = { onStart(workout, p.id) }) { Text("▶ Indítás") }
+                // Úszást a telefon nem tud mérni: azt az óra rögzíti, és a Health Connectből érkezik.
+                if (p.sport != "swim") TextButton(onClick = { onStart(workout, p.id) }) { Text("▶ Indítás") }
                 TextButton(onClick = { save(p.copy(status = DONE)) }) { Text("Kész") }
                 TextButton(onClick = { save(p.copy(status = SKIPPED)) }) { Text("Kihagyom") }
             }

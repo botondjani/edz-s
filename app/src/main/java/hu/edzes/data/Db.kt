@@ -9,6 +9,8 @@ import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 
@@ -67,6 +69,7 @@ data class SetLog(
     val reps: Int? = null,
     val weightKg: Double? = null,
     val durationS: Int? = null,
+    val distanceM: Double? = null,     // kardió részidőknél a szakaszon megtett táv
 )
 
 @Serializable
@@ -75,6 +78,7 @@ data class Backup(
     val planned: List<Planned>,
     val activities: List<Activity>,
     val setLogs: List<SetLog>,
+    val templates: List<hu.edzes.model.Workout> = emptyList(),
 )
 
 @Dao
@@ -130,7 +134,13 @@ interface EdzesDao {
     }
 }
 
-@Database(entities = [Program::class, Planned::class, Activity::class, SetLog::class], version = 1, exportSchema = false)
+@Database(entities = [Program::class, Planned::class, Activity::class, SetLog::class], version = 2, exportSchema = false)
 abstract class EdzesDb : RoomDatabase() {
     abstract fun dao(): EdzesDao
+
+    companion object {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) = db.execSQL("ALTER TABLE SetLog ADD COLUMN distanceM REAL")
+        }
+    }
 }

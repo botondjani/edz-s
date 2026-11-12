@@ -39,7 +39,14 @@ import hu.edzes.model.fmtSecs
 import hu.edzes.model.isCardio
 import hu.edzes.model.steps
 import hu.edzes.prefs
+import hu.edzes.data.Tracks
 import hu.edzes.sync.Sync
+import hu.edzes.sync.SyncWorker
+import hu.edzes.sync.TrackPoint
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -55,6 +62,10 @@ data class PlayerState(
     val stepDistM: Double,
     val paused: Boolean,
     val gps: Boolean,
+    val totalDistM: Double = 0.0,
+    val paceSPerKm: Int? = null,     // pillanatnyi tempó (az utolsó ~30 mp alapján)
+    val heartRate: Int? = null,      // élő pulzus Bluetooth-ról
+    val remainingS: Long? = null,    // hátralévő idő, ha minden hátralévő lépés időre megy
 )
 
 /** A futó edzés elérése a felületről. Minden hívás a fő szálon történik. */
@@ -97,10 +108,26 @@ class PlayerService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var lastFix: Location? = null
     private var gps = false
+    private var totalDistM = 0.0
+    private val track = mutableListOf<TrackPoint>()
+    private val recent = ArrayDeque<Pair<Long, Double>>()   // (edzésidő ms, össztáv m) a tempóhoz
+    private var nextKm = 1
+    private var hrMonitor: HeartRateMonitor? = null
+    private var heartRate: Int? = null
+    private var heartRateAtMs = 0L
+    private var hrSum = 0L
+    private var hrCount = 0
+    private var lastHrPointMs = 0L
 
     private val ticker = object : Runnable {
         override fun run() {
             val now = SystemClock.elapsedRealtime()
+            if (now - heartRateAtMs > 15_000) heartRate = null
+            // GPS nélküli edzésnél (pl. konditerem) a pulzust 5 mp-enként külön pontként tesszük el.
+            if (!gps && heartRate != null && !engine.paused && now - lastHrPointMs >= 5000) {
+                lastHrPointMs = now
+                track += TrackPoint(System.currentTimeMillis(), hr = heartRate)
+            }
             handle(engine.tick(now - lastTick))
             lastTick = now
             handler.postDelayed(this, 200)
@@ -108,11 +135,24 @@ class PlayerService : Service() {
     }
 
     private val locationListener = LocationListener { fix ->
-        if (fix.accuracy > 30) return@LocationListener
+        if (engine.paused) { lastFix = null; return@LocationListener }
+        if (fix.accuracy > 20) return@LocationListener
         val prev = lastFix
-        if (prev == null) { lastFix = fix; return@LocationListener }
-        val d = prev.distanceTo(fix)
-        if (d >= 5) { lastFix = fix; handle(engine.addDistance(d.toDouble())) }
+        val d = prev?.distanceTo(fix) ?: 0f
+        if (prev != null && d < 5) return@LocationListener
+        lastFix = fix
+        track += TrackPoint(fix.time, fix.latitude, fix.longitude, if (fix.hasAltitude()) fix.altitude else null, heartRate)
+        if (prev == null) return@LocationListener
+        totalDistM += d
+        recent += engine.totalMs to totalDistM
+        while (recent.size > 2 && engine.totalMs - recent.first().first > 30_000) recent.removeFirst()
+        val kmStep = if (workout.sport == "bike") 5 else 1
+        if (totalDistM >= nextKm * 1000) {
+            val pace = (engine.totalMs / totalDistM).toInt()   // mp/km
+            say("$nextKm kilométer, átlagtempó ${fmtSecs(pace)}", flush = false)
+            nextKm += kmStep
+        }
+        handle(engine.addDistance(d.toDouble()))
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -127,7 +167,8 @@ class PlayerService : Service() {
         lastTick = SystemClock.elapsedRealtime()
         Player.service = this
 
-        val wantsGps = engine.steps.any { it.distanceM != null } &&
+        nextKm = if (w.sport == "bike") 5 else 1
+        val wantsGps = (isCardio(w.sport) || engine.steps.any { it.distanceM != null }) &&
             checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val type = when {
             wantsGps -> ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
@@ -136,6 +177,11 @@ class PlayerService : Service() {
         }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(), type)
         if (wantsGps) startGps()
+        if (prefs.getBoolean("live_hr", true)) hrMonitor = HeartRateMonitor(this) { bpm ->
+            heartRate = bpm
+            heartRateAtMs = SystemClock.elapsedRealtime()
+            if (!engine.paused) { hrSum += bpm; hrCount++ }
+        }.also { it.start() }
 
         wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "edzes:player")
             .apply { acquire(6 * 3600 * 1000L) }
@@ -161,11 +207,15 @@ class PlayerService : Service() {
 
     fun handle(events: List<Engine.Event>) {
         for (e in events) when (e) {
-            is Engine.Event.Started -> { lastFix = null; signal(long = true); announce(e.step) }
-            is Engine.Event.Done ->
+            is Engine.Event.Started -> { signal(long = true); announce(e.step) }
+            is Engine.Event.Done -> when {
+                // Kardió részidő: a szakasz tényleges ideje és (GPS-szel) távja.
+                isCardio(workout.sport) -> if (!e.step.rest && e.ms >= 5000)
+                    log += SetLog(activityId = 0, exercise = e.step.title, durationS = (e.ms / 1000).toInt(), distanceM = e.distM.takeIf { gps })
                 // Időre végzett gyakorlat (pl. plank) naplózása, ha végigment.
-                if (e.completed && e.step.exercise != null && e.step.durationS != null)
+                e.completed && e.step.exercise != null && e.step.durationS != null ->
                     log += SetLog(activityId = 0, exercise = e.step.exercise, durationS = e.step.durationS)
+            }
             is Engine.Event.Countdown -> signal(long = false)
             Engine.Event.End -> { signal(long = true); say("Edzés vége") }
         }
@@ -176,6 +226,7 @@ class PlayerService : Service() {
         Player.state.value = PlayerState(
             workout, engine.index, engine.steps.size, engine.current, engine.next,
             engine.stepMs, engine.totalMs, engine.stepDistM, engine.paused, gps,
+            totalDistM, pace(), heartRate, engine.remainingMs()?.let { (it + 999) / 1000 },
         )
         if (shownStep != engine.index) {
             shownStep = engine.index
@@ -184,6 +235,14 @@ class PlayerService : Service() {
     }
 
     private var shownStep = 0
+
+    /** Pillanatnyi tempó mp/km-ben; null, ha nincs elég friss GPS adat (pl. állunk). */
+    private fun pace(): Int? {
+        if (recent.size < 2 || engine.totalMs - recent.last().first > 10_000) return null
+        val meters = recent.last().second - recent.first().second
+        val ms = recent.last().first - recent.first().first
+        return if (meters < 10) null else (ms / meters).toInt()
+    }
 
     private fun notification() = NotificationCompat.Builder(this, App.CHANNEL)
         .setSmallIcon(hu.edzes.R.drawable.ic_notification)
@@ -197,12 +256,14 @@ class PlayerService : Service() {
 
     private fun announce(step: Step) {
         val length = step.durationS?.let(::fmtSecs) ?: step.distanceM?.let(::fmtMeters)
-        say(listOfNotNull(step.title, length, step.info.takeIf { !step.rest }).joinToString(", "))
+        val lastRound = LAST_ROUND.find(step.info)?.let { it.groupValues[1] == it.groupValues[2] && it.groupValues[2] != "1" } == true
+        say(listOfNotNull(step.title, length, step.info.takeIf { !step.rest }, "utolsó kör".takeIf { lastRound && !step.rest }).joinToString(", "))
     }
 
-    private fun say(text: String) {
-        if (ttsReady && prefs.getBoolean("voice", true))
-            tts?.speak(text.replace("mp", "másodperc").replace("ism.", "ismétlés"), TextToSpeech.QUEUE_FLUSH, null, "step")
+    private fun say(text: String, flush: Boolean = true) {
+        if (!ttsReady || !prefs.getBoolean("voice", true)) return
+        val spoken = text.replace(Regex("\\bmp\\b"), "másodperc").replace("ism.", "ismétlés")
+        tts?.speak(spoken, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "step")
     }
 
     private fun signal(long: Boolean) {
@@ -217,16 +278,23 @@ class PlayerService : Service() {
         val start = startWallMs
         val logs = log.toList()
         val ctx = applicationContext
+        val distance = totalDistM.takeIf { it > 0 }
+        val avgHr = if (hrCount > 0) (hrSum / hrCount).toInt() else null
+        val points = track.toList()
         if (save) ctx.app.scope.launch {
             val dao = ctx.dao
-            // Kardiónál az óra rögzít (Health Connectből jön az edzés), itt csak a tervet pipáljuk ki.
-            val activityId = if (isCardio(w.sport)) null else {
-                val id = dao.insert(Activity(source = "app", sport = w.sport, title = w.title, startMs = start, durationS = durationS))
-                dao.insertSetLogs(logs.map { it.copy(activityId = id) })
-                id
-            }
-            pid?.let { dao.plannedById(it) }?.let { dao.update(it.copy(status = DONE, activityId = activityId)) }
+            val id = dao.insert(
+                Activity(source = "app", sport = w.sport, title = w.title, startMs = start, durationS = durationS, distanceM = distance, avgHr = avgHr)
+            )
+            dao.insertSetLogs(logs.map { it.copy(activityId = id) })
+            Tracks.write(ctx, id, points)
+            pid?.let { dao.plannedById(it) }?.let { dao.update(it.copy(status = DONE, activityId = id)) }
             Sync.run(ctx)
+            // Az óra pulzusadata később ér a Health Connectbe: fél óra múlva újra szinkronizálunk (ekkor megy fel a Stravára).
+            WorkManager.getInstance(ctx).enqueueUniqueWork(
+                "sync-after-workout", ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<SyncWorker>().setInitialDelay(35, TimeUnit.MINUTES).build(),
+            )
         }
         stopSelf()
     }
@@ -234,6 +302,7 @@ class PlayerService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
         if (gps) getSystemService(LocationManager::class.java).removeUpdates(locationListener)
+        hrMonitor?.stop()
         tts?.shutdown()
         tone?.release()
         wakeLock?.takeIf { it.isHeld }?.release()
@@ -241,5 +310,8 @@ class PlayerService : Service() {
         super.onDestroy()
     }
 
-    companion object { const val NOTIFICATION_ID = 1 }
+    companion object {
+        const val NOTIFICATION_ID = 1
+        private val LAST_ROUND = Regex("(\\d+)/(\\d+)\\. kör(?!.*kör)")
+    }
 }

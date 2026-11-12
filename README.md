@@ -6,11 +6,14 @@ Személyes, offline-first Android edzésapp. Nincs saját szerver: minden adat a
   illeszd be / nyisd meg fájlból / oszd meg a Claude appból az Edzés appnak. Egy lépésben beütemezi az egész ciklust,
   és bármikor újraindítható.
 - **Naptár**: napokra ütemezett edzések, kész / kihagyva jelölés, áthelyezés.
-- **Lejátszó**: súlyzós sorozatok naplózása pihenő-visszaszámlálóval, HIIT/Tabata/időzített gyakorlatok,
-  futó-/kerékpáros szakaszok (idő vagy GPS-táv alapján) magyar hangbemondással, zárolt képernyő mellett is.
-  Szabad edzés és gyors intervall időzítő terv nélkül.
+- **Edzés indítása** (Ma fül): Futás / Kerékpár / Séta élő idővel, távval, tempóval és pulzussal, GPS-szel rögzítve;
+  Súlyzós edzés sorozatnaplóval és pihenő-visszaszámlálóval; Intervall-szerkesztő (bemelegítés, N × munka idő vagy táv
+  szerint + pihenő, levezetés), sablonként menthető. Magyar hangbemondás, zárolt képernyő mellett is; kilométerenként
+  átlagtempó, intervallnál részidők.
+- **Élő pulzus**: Bluetooth LE pulzusszolgáltatásból (mellkaspánt, vagy pulzust megosztó karkötő). Fitbit Airnél a
+  Google Health appban kell bekapcsolni a pulzus megosztását („Share heart rate”, mindig látható).
 - **Health Connect**: az órával (Fitbit / Google Health) mért edzések, pulzus, táv, útvonal átvétele; automatikus
-  párosítás a napi tervvel.
+  párosítás a napi tervvel. Ha ugyanazt az edzést az app is mérte, a kettőt összevonja. Az úszást csak az óra méri.
 - **Strava**: kétirányú szinkron duplikáció-szűréssel. A konditermi edzés leírásába a gyakorlatok és súlyok is felkerülnek.
 - **Mentés / visszaállítás**: teljes adatbázis egy JSON fájlban (Claude-nak is feltölthető elemzésre).
 
@@ -49,6 +52,8 @@ szinkron. Az első útvonalas edzés feltöltésekor a Health Connect külön r�
 4. A Google Health → Strava közvetlen szinkront kapcsold ki, különben dupla edzések keletkezhetnek.
 
 Automatikusan csak az összekapcsolás utáni edzések mennek fel; a régebbiek és a séták kézzel (vagy kapcsolóval).
+Az appban mért edzés feltöltésével az app legfeljebb fél órát vár, hogy az óra pulzusadata megérkezzen a Health Connectbe
+(élő Bluetooth-pulzussal azonnal megy). Az Előzményekben kézzel is feltölthető.
 
 ## Elemzés Claude-ban
 
@@ -58,7 +63,7 @@ részleteit a leírásból). Alternatíva: Beállítások → „Mentés fájlba
 ## Program formátum
 
 A teljes leírás és példa a prompt szövegében van: [`Program.kt`](app/src/main/java/hu/edzes/model/Program.kt) (`CLAUDE_PROMPT`).
-Blokktípusok: `sets`, `timed`, `interval`, `segment`, `repeat`.
+Blokktípusok: `sets`, `timed`, `interval` (idő vagy táv alapú), `segment`, `repeat`.
 
 ## Fejlesztés
 

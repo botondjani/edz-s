@@ -65,6 +65,14 @@ class Hc(ctx: Context) {
     suspend fun route(hcId: String): ExerciseRouteResult =
         client.readRecord(ExerciseSessionRecord::class, hcId).record.exerciseRouteResult
 
+    /** Hány edzés látszik az elmúlt 30 napból, és mely appok írták (hibakereséshez a Beállításokban). */
+    suspend fun diagnose(): String {
+        val list = sessions(Instant.now().minusSeconds(30 * 86400L))
+        if (list.isEmpty()) return "Az elmúlt 30 napból egy edzés sem látszik a Health Connectben. A Google Health appban " +
+            "kapcsold be a Health Connect megosztást (edzések, pulzus, távolság), majd szinkronizálj."
+        return "${list.size} edzés látszik az elmúlt 30 napból. Forrás: " + list.map { it.metadata.dataOrigin.packageName }.distinct().joinToString()
+    }
+
     companion object {
         val PERMS = setOf(
             HealthPermission.getReadPermission(ExerciseSessionRecord::class),

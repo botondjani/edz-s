@@ -155,10 +155,16 @@ object ProgramParser {
                     "timed", str(o, path, "exercise").orEmpty(), int(o, path, "sets", required = false, min = 1) ?: 1,
                     durationS = int(o, path, "duration_s", min = 1), restS = int(o, path, "rest_s", required = false) ?: 0,
                 )
-                "interval" -> Block(
-                    "interval", str(o, path, "name", required = false) ?: "Intervall", int(o, path, "rounds", min = 1) ?: 1,
-                    durationS = int(o, path, "work_s", min = 1), restS = int(o, path, "rest_s") ?: 0,
-                )
+                "interval" -> {
+                    val dur = int(o, path, "work_s", required = false, min = 1)
+                    val dist = int(o, path, "work_m", required = false, min = 1)
+                    if ((dur == null) == (dist == null)) errors += "$path: a \"work_s\" és a \"work_m\" közül pontosan egy kell"
+                    Block(
+                        "interval", str(o, path, "name", required = false) ?: "Intervall", int(o, path, "rounds", min = 1) ?: 1,
+                        durationS = dur, distanceM = dist, restS = int(o, path, "rest_s") ?: 0,
+                        target = str(o, path, "target", required = false),
+                    )
+                }
                 "segment" -> {
                     val dur = int(o, path, "duration_s", required = false, min = 1)
                     val dist = int(o, path, "distance_m", required = false, min = 1)
@@ -197,11 +203,13 @@ fun Workout.summary(): List<String> = listOfNotNull(target) + blocks.map { it.su
 private fun Block.summary(): String = when (type) {
     "sets" -> "$name — $sets × $reps" + (weightKg?.let { " @ ${fmtKg(it)}" } ?: "") + restText()
     "timed" -> "$name — $sets × ${fmtSecs(durationS ?: 0)}" + restText()
-    "interval" -> "$name — $sets × ${fmtSecs(durationS ?: 0)} / ${fmtSecs(restS)}"
-    "segment" -> "$name — " + (durationS?.let(::fmtSecs) ?: fmtMeters(distanceM ?: 0)) + (target?.let { " · $it" } ?: "")
+    "interval" -> "$name — $sets × ${length()} / pihenő ${fmtSecs(restS)}" + targetText()
+    "segment" -> "$name — ${length()}" + targetText()
     else -> "$sets× [" + blocks.joinToString(" + ") { it.summary() } + "]"
 }
 
+private fun Block.length() = durationS?.let(::fmtSecs) ?: fmtMeters(distanceM ?: 0)
+private fun Block.targetText() = target?.let { " · $it" } ?: ""
 private fun Block.restText() = if (restS > 0) ", pihenő ${fmtSecs(restS)}" else ""
 
 /** A lejátszó egy lépése. Ha nincs időtartam és táv, a felhasználó lépteti (súlyzós sorozat). */
@@ -231,12 +239,26 @@ fun flatten(blocks: List<Block>, prefix: String = ""): List<Step> = blocks.flatM
             listOfNotNull(Step(b.name, "$prefix$i/${b.sets}. sorozat", durationS = b.durationS, exercise = b.name), rest)
         }
         "interval" -> (1..b.sets).flatMap { i ->
-            listOfNotNull(Step(b.name, "$prefix$i/${b.sets}. kör", durationS = b.durationS), rest)
+            listOfNotNull(Step(b.name, "$prefix$i/${b.sets}. kör" + (b.target?.let { " · $it" } ?: ""), durationS = b.durationS, distanceM = b.distanceM), rest)
         }
         "segment" -> listOf(Step(b.name, prefix + b.target.orEmpty(), durationS = b.durationS, distanceM = b.distanceM))
         "repeat" -> (1..b.sets).flatMap { i -> flatten(b.blocks, "$prefix$i/${b.sets}. kör · ") }
         else -> emptyList()
     }
+}
+
+/** Az intervall-szerkesztő edzése: bemelegítés, N × (munka idő vagy táv szerint + pihenő), levezetés. Teremben csak a körök. */
+fun intervalWorkout(
+    sport: String, name: String, warmupMin: Int, work: Int, byDistance: Boolean, restS: Int, rounds: Int, cooldownMin: Int,
+): Workout {
+    val gym = !isCardio(sport)
+    fun easy(label: String, minutes: Int) = if (minutes > 0 && !gym) Block("segment", label, durationS = minutes * 60) else null
+    val interval = Block(
+        "interval", if (gym) "Munka" else "Gyors", sets = rounds, restS = restS,
+        durationS = work.takeIf { !byDistance }, distanceM = work.takeIf { byDistance },
+    )
+    val title = name.trim().ifEmpty { "$rounds × $work ${if (byDistance) "m" else "mp"} / $restS mp" }
+    return Workout(title, sport, blocks = listOfNotNull(easy("Bemelegítés", warmupMin), interval, easy("Levezetés", cooldownMin)))
 }
 
 const val CLAUDE_PROMPT = """Készíts edzésprogramot az alábbi JSON formátumban. Csak a JSON-t add vissza, egyetlen kódblokkban.
@@ -259,6 +281,7 @@ const val CLAUDE_PROMPT = """Készíts edzésprogramot az alábbi JSON formátum
         "title": "Intervall futás", "sport": "run",
         "blocks": [
           { "type": "segment", "name": "Bemelegítés", "duration_s": 600, "target": "Z2" },
+          { "type": "interval", "name": "Gyors", "work_m": 400, "rest_s": 90, "rounds": 6, "target": "Z5" },
           { "type": "repeat", "times": 5, "blocks": [
               { "type": "segment", "name": "Gyors", "distance_m": 1000, "target": "Z4, 4:30/km" },
               { "type": "segment", "name": "Kocogás", "duration_s": 120, "target": "Z1" } ] },
@@ -272,7 +295,7 @@ const val CLAUDE_PROMPT = """Készíts edzésprogramot az alábbi JSON formátum
 Szabályok:
 - sport: run | bike | swim | strength | hiit | walk | other
 - weekday: MON | TUE | WED | THU | FRI | SAT | SUN; week: 1-től számozva. Minden hét minden edzését írd ki külön (a progresszióval együtt).
-- Blokktípusok: sets (exercise, sets, reps, opcionális weight_kg és rest_s), timed (exercise, duration_s, opcionális sets és rest_s), interval (name, work_s, rest_s, rounds), segment (name, és duration_s VAGY distance_m, opcionális target), repeat (times, blocks).
+- Blokktípusok: sets (exercise, sets, reps, opcionális weight_kg és rest_s), timed (exercise, duration_s, opcionális sets és rest_s), interval (name, work_s VAGY work_m, rest_s, rounds, opcionális target), segment (name, és duration_s VAGY distance_m, opcionális target), repeat (times, blocks).
 - A reps lehet szám vagy szöveg (pl. "8-10", "max"). Idő másodpercben, táv méterben, súly kg-ban.
 - Blokkok nélküli kardió edzésnél a target adja a célt: duration_min, distance_km, hr_zone, pace, note.
 

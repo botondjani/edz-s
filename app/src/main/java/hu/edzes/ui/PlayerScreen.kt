@@ -16,6 +16,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -66,8 +67,15 @@ fun PlayerScreen(state: PlayerState) {
     val entered = remember { mutableStateMapOf<String, Pair<String, String>>() }
     BackHandler { finishing = true }
     val step = state.step
+    val cardio = isCardio(state.workout.sport)
+    // Intervallnál ránézésre látszódjon, hogy munka vagy pihenő van.
+    val background = when {
+        step == null || step.manual -> MaterialTheme.colorScheme.surface
+        step.rest -> MaterialTheme.colorScheme.tertiaryContainer
+        else -> MaterialTheme.colorScheme.primaryContainer
+    }
 
-    Surface(Modifier.fillMaxSize()) {
+    Surface(Modifier.fillMaxSize(), color = background) {
         Column(Modifier.safeDrawingPadding().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(state.workout.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
@@ -77,9 +85,27 @@ fun PlayerScreen(state: PlayerState) {
                 progress = { if (state.stepCount == 0) 0f else state.index.toFloat() / state.stepCount },
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )
+            state.remainingS?.let {
+                Text("Hátra összesen: ${fmtClock(it)}", Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodyMedium)
+            }
+            if (cardio || state.heartRate != null) Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                if (cardio) {
+                    Metric("Táv (km)", if (state.gps) "%.2f".format(HU, state.totalDistM / 1000) else "–", Modifier.weight(1f))
+                    Metric(if (state.workout.sport == "bike") "km/h" else "Tempó (/km)", fmtPace(state.paceSPerKm, state.workout.sport), Modifier.weight(1f))
+                }
+                Metric("Pulzus", state.heartRate?.toString() ?: "–", Modifier.weight(1f))
+            }
+            if (cardio && !state.gps) Text(
+                "Nincs GPS (engedély vagy helymeghatározás kikapcsolva): táv és tempó nem mérhető.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+            )
             Spacer(Modifier.weight(1f))
 
-            if (step == null) {
+            if (step == null && cardio) {
+                // Szabad futás/kerékpár, vagy a szakaszok elfogytak: a fő szám az eltelt idő.
+                BigNumber(fmtClock(state.totalMs / 1000))
+                Text(if (state.stepCount == 0) state.workout.target ?: "Szabad edzés" else "Minden szakasz kész 🎉", style = MaterialTheme.typography.titleMedium)
+            } else if (step == null) {
                 Text(
                     if (state.stepCount == 0) "Szabad edzés" else "Minden lépés kész 🎉",
                     style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center,
@@ -88,7 +114,6 @@ fun PlayerScreen(state: PlayerState) {
             } else {
                 Text(
                     step.title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
-                    color = if (step.rest) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface,
                 )
                 if (step.info.isNotEmpty()) Text(step.info, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
                 when {
@@ -96,7 +121,7 @@ fun PlayerScreen(state: PlayerState) {
                     step.distanceM != null -> {
                         BigNumber(fmtMeters((step.distanceM - state.stepDistM).toInt().coerceAtLeast(0)))
                         Text(
-                            if (state.gps) "hátra · eltelt ${fmtClock(state.stepMs / 1000)}" else "Nincs GPS – a szakasz végén koppints a Tovább gombra",
+                            if (state.gps) "hátra · eltelt ${fmtClock(state.stepMs / 1000)}" else "A szakasz végén koppints a Tovább gombra",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
@@ -104,7 +129,7 @@ fun PlayerScreen(state: PlayerState) {
                 }
                 state.next?.let {
                     Text("Következő: ${it.title} ${it.info}", Modifier.padding(top = 16.dp), style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center)
+                        color = LocalContentColor.current.copy(alpha = 0.7f), textAlign = TextAlign.Center)
                 }
             }
 
@@ -134,6 +159,12 @@ fun PlayerScreen(state: PlayerState) {
             }
         },
     )
+}
+
+@Composable
+private fun Metric(label: String, value: String, modifier: Modifier) = Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    Text(value, fontSize = 40.sp, fontWeight = FontWeight.Medium)
+    Text(label, style = MaterialTheme.typography.labelMedium)
 }
 
 @Composable

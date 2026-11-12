@@ -5,10 +5,12 @@ import hu.edzes.data.SetLog
 import hu.edzes.model.CLAUDE_PROMPT
 import hu.edzes.model.ProgramParser
 import hu.edzes.model.dates
+import hu.edzes.model.intervalWorkout
 import hu.edzes.model.steps
 import hu.edzes.model.summary
 import hu.edzes.player.Engine
 import hu.edzes.player.Engine.Event
+import hu.edzes.player.HeartRateMonitor
 import hu.edzes.sync.Strava
 import hu.edzes.sync.StravaActivity
 import hu.edzes.sync.TrackPoint
@@ -73,9 +75,12 @@ class LogicTest {
         assertEquals("3/3. kör · 1/1. sorozat · max ism.", strength.last().info)
 
         val run = example.program!!.days[1].workout.steps()
-        assertEquals(1 + 5 * 2 + 1, run.size)
-        assertEquals(1000, run[1].distanceM)
-        assertEquals("1/5. kör · Z4, 4:30/km", run[1].info)
+        assertEquals(1 + 6 * 2 + 5 * 2 + 1, run.size)
+        assertEquals(400, run[1].distanceM)
+        assertEquals("1/6. kör · Z5", run[1].info)
+        assertTrue(run[2].rest && run[2].durationS == 90)
+        assertEquals("1/5. kör · Z4, 4:30/km", run[13].info)
+        assertEquals("Gyors — 6 × 400 m / pihenő 1 perc 30 mp · Z5", example.program!!.days[1].workout.summary()[1])
     }
 
     @Test fun `a program a kezdo hetfotol utemezodik`() {
@@ -84,21 +89,28 @@ class LogicTest {
     }
 
     @Test fun `a lejatszo ido, tav es kezi leptetes alapjan halad`() {
-        val steps = example.program!!.days[1].workout.steps().take(3)   // 600 mp, 1000 m, 120 mp
+        val steps = example.program!!.days[1].workout.steps().take(3)   // 600 mp, 400 m, 90 mp pihenő
         val e = Engine(steps)
+        assertNull(Engine(steps).remainingMs())   // van táv alapú lépés: nem tudható előre
         assertEquals(emptyList<Event>(), e.tick(596_000))
         assertEquals(listOf(Event.Countdown(3)), e.tick(1_000))
         assertEquals(listOf(Event.Countdown(2)), e.tick(1_000))
         e.paused = true
         assertEquals(emptyList<Event>(), e.tick(60_000))
+        assertEquals(emptyList<Event>(), e.addDistance(50.0))
         e.paused = false
         assertEquals(listOf(Event.Countdown(1)), e.tick(1_000))
-        assertEquals(listOf(Event.Done(steps[0], true), Event.Started(steps[1])), e.tick(1_000))
+        // Az idő alapú szakaszon megtett táv is mérődik (részidőkhöz).
+        assertEquals(emptyList<Event>(), e.addDistance(1500.0))
+        assertEquals(listOf(Event.Done(steps[0], true, 600_000, 1500.0), Event.Started(steps[1])), e.tick(1_000))
         // Táv alapú szakaszon az idő nem léptet, a megtett táv igen.
-        assertEquals(emptyList<Event>(), e.tick(900_000))
-        assertEquals(emptyList<Event>(), e.addDistance(999.0))
-        assertEquals(listOf(Event.Done(steps[1], true), Event.Started(steps[2])), e.addDistance(1.5))
+        assertEquals(emptyList<Event>(), e.tick(95_000))
+        assertEquals(emptyList<Event>(), e.addDistance(399.0))
+        assertEquals(listOf(Event.Done(steps[1], true, 95_000, 400.5), Event.Started(steps[2])), e.addDistance(1.5))
         assertEquals(0.0, e.stepDistM, 0.0)
+        assertEquals(90_000L, e.remainingMs())
+        e.tick(10_000)
+        assertEquals(80_000L, e.remainingMs())
         assertEquals(listOf(Event.Started(steps[1])), e.prev())
         // Kézzel átugrott időzített/táv lépés nem számít teljesítettnek.
         assertEquals(listOf(Event.Done(steps[1], false), Event.Started(steps[2])), e.next())
@@ -106,14 +118,14 @@ class LogicTest {
         assertNull(e.current)
         assertEquals(emptyList<Event>(), e.next())
         assertEquals(listOf(Event.Started(steps[0])), e.append(listOf(steps[0])))
-        assertEquals((596 + 4 + 900) * 1000L, e.totalMs)
+        assertEquals((596 + 4 + 95 + 10) * 1000L, e.totalMs)
     }
 
     @Test fun `kezi sorozat a Tovabb gombbal teljesul`() {
         val steps = example.program!!.days[0].workout.steps()
         val e = Engine(steps)
         assertEquals(emptyList<Event>(), e.tick(30_000))
-        assertEquals(listOf(Event.Done(steps[0], true), Event.Started(steps[1])), e.next())
+        assertEquals(listOf(Event.Done(steps[0], true, 30_000), Event.Started(steps[1])), e.next())
     }
 
     private fun activity(id: Long, startMin: Int, durMin: Int, stravaId: Long? = null) =
@@ -138,8 +150,10 @@ class LogicTest {
             SetLog(activityId = 1, exercise = "Plank", durationS = 60),
             SetLog(activityId = 1, exercise = "Fekvenyomás", reps = 7, weightKg = 62.5),
             SetLog(activityId = 1, exercise = "Húzódzkodás", reps = 10),
+            SetLog(activityId = 1, exercise = "Gyors", durationS = 92, distanceM = 400.4),
+            SetLog(activityId = 1, exercise = "Gyors", durationS = 95, distanceM = 401.0),
         )
-        assertEquals("Fekvenyomás: 8×60 kg, 7×62,5 kg\nPlank: 1 perc\nHúzódzkodás: 10 ism.", describe(logs))
+        assertEquals("Fekvenyomás: 8×60 kg, 7×62,5 kg\nPlank: 1 perc\nHúzódzkodás: 10 ism.\nGyors: 400 m 1:32, 401 m 1:35", describe(logs))
     }
 
     @Test fun `TCX - GPS pontok pulzussal, GPS nelkul elosztott tavval`() {
@@ -154,6 +168,33 @@ class LogicTest {
 
         val swim = buildTcx("swim", 0, 100, 1000.0, null, mergePoints(emptyList(), hr))
         assertTrue("Sport=\"Other\"" in swim && "<DistanceMeters>500.0</DistanceMeters><HeartRateBpm><Value>150" in swim)
+    }
+
+    @Test fun `Bluetooth pulzus ertelmezese`() {
+        assertEquals(142, HeartRateMonitor.parseHeartRate(byteArrayOf(0x00, 142.toByte())))
+        assertEquals(300, HeartRateMonitor.parseHeartRate(byteArrayOf(0x01, 0x2C, 0x01)))
+        assertNull(HeartRateMonitor.parseHeartRate(byteArrayOf(0x00)))
+    }
+
+    @Test fun `intervall blokk tavval is megadhato, de csak egyfelekeppen`() {
+        fun parse(work: String) = ProgramParser.parse(
+            """{"format":"edzes-program/v1","name":"A","days":[{"week":1,"weekday":"MON","workout":{"title":"T","sport":"run",
+               "blocks":[{"type":"interval",$work"rest_s":60,"rounds":4}]}}]}"""
+        )
+        assertEquals(400, parse("\"work_m\":400,").program!!.days[0].workout.blocks[0].distanceM)
+        assertTrue("\"work_s\" és a \"work_m\"" in parse("").errors.single())
+        assertTrue("\"work_s\" és a \"work_m\"" in parse("\"work_m\":400,\"work_s\":60,").errors.single())
+    }
+
+    @Test fun `intervall-szerkeszto edzese`() {
+        val run = intervalWorkout("run", "", 10, 400, true, 90, 6, 5)
+        assertEquals("6 × 400 m / 90 mp", run.title)
+        assertEquals(listOf("Bemelegítés — 10 perc", "Gyors — 6 × 400 m / pihenő 1 perc 30 mp", "Levezetés — 5 perc"), run.summary())
+        assertEquals(1 + 12 + 1, run.steps().size)
+        val gym = intervalWorkout("hiit", " Tabata ", 10, 20, false, 10, 8, 5)
+        assertEquals("Tabata", gym.title)
+        assertEquals(listOf("Munka — 8 × 20 mp / pihenő 10 mp"), gym.summary())
+        assertEquals((8 * 20 + 7 * 10) * 1000L, Engine(gym.steps()).remainingMs())   // a záró pihenő elmarad
     }
 
     @Test fun `Strava duplikatum felismerese`() {

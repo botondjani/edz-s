@@ -31,6 +31,7 @@ import androidx.health.connect.client.contracts.ExerciseRouteRequestContract
 import hu.edzes.UiState
 import hu.edzes.dao
 import hu.edzes.data.Activity
+import hu.edzes.data.Tracks
 import hu.edzes.model.sportEmoji
 import hu.edzes.sync.Strava
 import hu.edzes.sync.Sync
@@ -108,7 +109,7 @@ fun ActivityDialog(a: Activity, onDismiss: () -> Unit) {
     }
     // Az útvonalhoz a Health Connect saját engedélykérő ablaka kell; a válasz után töltünk fel.
     val routeConsent = rememberLauncherForActivityResult(ExerciseRouteRequestContract()) { route ->
-        upload({ Sync.upload(ctx.applicationContext, a, route, routeDenied = route == null) })
+        upload({ Sync.upload(ctx.applicationContext, a, route, routeDenied = route == null, force = true) })
     }
 
     AlertDialog(
@@ -137,7 +138,7 @@ fun ActivityDialog(a: Activity, onDismiss: () -> Unit) {
                 }) { Text("Megnyitás Stravában") }
                 stravaConnected -> TextButton(enabled = !busy, onClick = {
                     if (a.needsRoute) routeConsent.launch(a.hcId!!)
-                    else upload({ Sync.upload(ctx.applicationContext, a.copy(stravaError = null)) }) {
+                    else upload({ Sync.upload(ctx.applicationContext, a.copy(stravaError = null), force = true) }) {
                         if (ctx.dao.activity(a.id)?.needsRoute == true) routeConsent.launch(a.hcId!!)
                     }
                 }) { Text(if (busy) "Feltöltés…" else "Feltöltés Stravára") }
@@ -148,7 +149,7 @@ fun ActivityDialog(a: Activity, onDismiss: () -> Unit) {
                 TextButton(onClick = {
                     onDismiss()
                     scope.launch {
-                        if (a.source == "app") ctx.dao.deleteActivity(a.id)
+                        if (a.source == "app") { ctx.dao.deleteActivity(a.id); Tracks.delete(ctx, a.id) }
                         else { ctx.dao.unlinkActivity(a.id); ctx.dao.update(a.copy(hidden = true)) }
                     }
                 }) { Text("Törlés") }

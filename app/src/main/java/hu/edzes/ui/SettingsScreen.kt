@@ -36,6 +36,8 @@ import androidx.health.connect.client.PermissionController
 import hu.edzes.UiState
 import hu.edzes.dao
 import hu.edzes.data.Backup
+import hu.edzes.data.Templates
+import androidx.health.connect.client.HealthConnectClient
 import hu.edzes.prefs
 import hu.edzes.sync.Hc
 import hu.edzes.sync.Strava
@@ -65,13 +67,20 @@ fun SettingsScreen() {
         }
         Text(
             when {
-                !hcAvailable -> "A Health Connect nem érhető el ezen a telefonon (telepítsd vagy frissítsd a Play Áruházból)."
+                !hcAvailable -> "A Health Connect nem érhető el ezen a telefonon (telepítsd vagy frissítsd a Play Áruházból), ezért az órával mért edzések nem tudnak megjelenni."
                 hcGranted -> "✓ Összekapcsolva. Az órával mért edzések automatikusan megjelennek."
                 else -> "Az órával mért edzések (futás, kerékpár, úszás, pulzus) innen érkeznek. A Google Health appban is kapcsold be a Health Connect szinkront."
             },
             style = MaterialTheme.typography.bodyMedium,
         )
         if (hcAvailable && !hcGranted) Button(onClick = { hcRequest.launch(Hc.REQUEST) }, Modifier.padding(top = 8.dp)) { Text("Engedélyek megadása") }
+        if (hcGranted) {
+            val seen by produceState("", hcTick) { value = runCatching { Hc(ctx).diagnose() }.getOrElse { "Olvasási hiba: ${it.message}" } }
+            Text(seen, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall)
+        }
+        if (hcAvailable) TextButton(onClick = {
+            runCatching { ctx.startActivity(HealthConnectClient.getHealthConnectManageDataIntent(ctx)) }
+        }) { Text("Health Connect megnyitása") }
 
         Section("Strava")
         val connected = remember(UiState.stravaTick) { Strava(ctx).connected }
@@ -103,12 +112,18 @@ fun SettingsScreen() {
 
         Section("Edzés közben")
         PrefSwitch("voice", true, "Hangbemondás (magyar szövegfelolvasó)")
+        PrefSwitch("live_hr", true, "Élő pulzus Bluetooth-on")
+        Text(
+            "Az élő pulzushoz az órának/karkötőnek sugároznia kell a pulzust. Fitbit Airnél: Google Health app → eszköz beállításai → " +
+                "pulzus megosztása (Share heart rate) → mindig látható. Mellkaspánttal is működik.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
+        )
 
         Section("Adatok")
         var restoring by remember { mutableStateOf<Backup?>(null) }
         val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
             if (uri != null) scope.launch {
-                val json = Json.encodeToString(ctx.dao.backup())
+                val json = Json.encodeToString(ctx.dao.backup().copy(templates = Templates.load(ctx)))
                 withContext(Dispatchers.IO) { ctx.contentResolver.openOutputStream(uri)!!.use { it.write(json.toByteArray()) } }
                 ctx.toast("Mentés kész")
             }
@@ -131,7 +146,7 @@ fun SettingsScreen() {
                 onDismissRequest = { restoring = null },
                 title = { Text("Visszaállítás") },
                 text = { Text("A fájl ${b.programs.size} programot és ${b.activities.size} edzést tartalmaz. A mostani adatok helyére kerül – biztos?") },
-                confirmButton = { TextButton(onClick = { restoring = null; scope.launch { ctx.dao.restore(b); ctx.toast("Visszaállítva") } }) { Text("Visszaállítás") } },
+                confirmButton = { TextButton(onClick = { restoring = null; scope.launch { ctx.dao.restore(b); Templates.save(ctx, b.templates); ctx.toast("Visszaállítva") } }) { Text("Visszaállítás") } },
                 dismissButton = { TextButton(onClick = { restoring = null }) { Text("Mégse") } },
             )
         }

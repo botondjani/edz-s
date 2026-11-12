@@ -6,7 +6,8 @@ import hu.edzes.model.Step
 class Engine(steps: List<Step>) {
     sealed interface Event {
         data class Started(val step: Step) : Event
-        data class Done(val step: Step, val completed: Boolean) : Event
+        /** ms / distM: a lépésen ténylegesen töltött idő és megtett táv. */
+        data class Done(val step: Step, val completed: Boolean, val ms: Long = 0, val distM: Double = 0.0) : Event
         data class Countdown(val secondsLeft: Int) : Event
         data object End : Event
     }
@@ -25,9 +26,11 @@ class Engine(steps: List<Step>) {
     fun tick(dtMs: Long): List<Event> {
         if (paused) return emptyList()
         totalMs += dtMs
-        val limitMs = (current?.durationS ?: return emptyList()) * 1000L
-        val leftBefore = secondsLeft(limitMs)
+        val step = current ?: return emptyList()
+        val limitMs = step.durationS?.times(1000L)
+        val leftBefore = limitMs?.let(::secondsLeft)
         stepMs += dtMs
+        if (limitMs == null) return emptyList()
         if (stepMs >= limitMs) return advance(true)
         val left = secondsLeft(limitMs)
         return if (left != leftBefore && left in 1..3) listOf(Event.Countdown(left)) else emptyList()
@@ -35,12 +38,19 @@ class Engine(steps: List<Step>) {
 
     private fun secondsLeft(limitMs: Long) = ((limitMs - stepMs + 999) / 1000).toInt()
 
-    /** GPS-ből mért megtett táv; csak táv alapú szakasznál számít. */
+    /** GPS-ből mért megtett táv; táv alapú szakaszt a cél elérésekor léptet. */
     fun addDistance(meters: Double): List<Event> {
-        val goal = current?.distanceM ?: return emptyList()
-        if (paused) return emptyList()
+        if (paused || current == null) return emptyList()
         stepDistM += meters
+        val goal = current?.distanceM ?: return emptyList()
         return if (stepDistM >= goal) advance(true) else emptyList()
+    }
+
+    /** A hátralévő idő, ha minden hátralévő lépés időre megy; különben null. */
+    fun remainingMs(): Long? {
+        val rest = list.drop(index)
+        if (rest.isEmpty() || rest.any { it.durationS == null }) return null
+        return rest.sumOf { it.durationS!! * 1000L } - stepMs
     }
 
     /** Kézi léptetés: sorozat kész, vagy időzített lépés átugrása. */
@@ -60,9 +70,9 @@ class Engine(steps: List<Step>) {
     }
 
     private fun advance(completed: Boolean): List<Event> {
-        val done = list[index]
+        val done = Event.Done(list[index], completed, stepMs, stepDistM)
         index++
         stepMs = 0; stepDistM = 0.0
-        return listOf(Event.Done(done, completed), current?.let { Event.Started(it) } ?: Event.End)
+        return listOf(done, current?.let { Event.Started(it) } ?: Event.End)
     }
 }

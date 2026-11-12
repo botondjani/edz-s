@@ -8,6 +8,12 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import android.location.Location
+import android.location.LocationManager
+import hu.edzes.data.Templates
+import hu.edzes.data.Tracks
+import hu.edzes.model.intervalWorkout
+import org.junit.Assert.assertTrue
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import hu.edzes.data.DONE
 import hu.edzes.model.ProgramParser
@@ -65,10 +71,63 @@ class AppSmokeTest {
         rule.waitForIdle()
     }
 
+    /** Intervall futás szimulált GPS-szel: részidő, táv és útvonal mentése. */
+    private fun intervalRun() {
+        val app = rule.activity.app
+        val lm = app.getSystemService(LocationManager::class.java)
+        shadowOf(lm).setProviderEnabled(LocationManager.GPS_PROVIDER, true)
+        var north = 0
+        fun move(seconds: Int) = repeat(seconds) {   // másodpercenként ~11 m észak felé
+            shadowOf(lm).simulateLocation(Location(LocationManager.GPS_PROVIDER).apply {
+                latitude = 47.5 + 0.0001 * north++; longitude = 19.0; accuracy = 5f; time = System.currentTimeMillis()
+                elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos()
+            })
+            idle(1)
+        }
+
+        tab("Ma")
+        // Mentett sablonból indítunk (a szerkesztő ablakot a Robolectric nem tudja nyugalmi állapotba hozni).
+        Templates.save(app, listOf(intervalWorkout("run", "", 10, 400, true, 90, 6, 5)))
+        tab("Naptár")
+        tab("Ma")
+        shot("ma-inditas")
+        rule.onNodeWithText("▶ 🏃 6 × 400 m / 90 mp").performScrollTo().performClick()
+        val service = Robolectric.buildService(PlayerService::class.java).create().startCommand(0, 0)
+        rule.waitForIdle()
+        rule.onNodeWithText("Bemelegítés").assertIsDisplayed()
+        rule.onNodeWithText("Tovább ▶").performClick()
+        rule.onNodeWithText("Gyors").assertIsDisplayed()
+        rule.onNodeWithText("1/6. kör").assertIsDisplayed()
+        move(20)
+        shot("futas-intervall")
+        move(20)   // 400 m megvan
+        rule.onNodeWithText("Pihenő").assertIsDisplayed()
+        shot("futas-piheno")
+        move(91)
+        rule.onNodeWithText("2/6. kör").assertIsDisplayed()
+        move(20)
+        rule.onNodeWithText("Befejezés").performClick()
+        rule.onNodeWithText("Mentés").performClick()
+        service.destroy()
+
+        val dao = app.db.dao()
+        await { runBlocking { dao.activities().first() }.size == 2 && Tracks.read(app, runBlocking { dao.activities().first() }.first().id).isNotEmpty() }
+        val run = runBlocking { dao.activities().first() }.first()
+        assertEquals("run", run.sport)
+        assertEquals("6 × 400 m / 90 mp", run.title)
+        assertTrue("táv: ${run.distanceM}", run.distanceM!! in 1600.0..1750.0)   // ~151 mp × 11,1 m
+        val laps = runBlocking { describe(dao.setLogs(run.id)) }
+        assertTrue(laps, Regex("Gyors: 4\\d\\d m 0:3\\d").matches(laps))
+        assertTrue(Tracks.read(app, run.id).size > 140)
+    }
+
     @Test fun `import, edzes, mentes`() {
         val app = rule.activity.app
-        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        rule.onNodeWithText("Mára nincs tervezett edzés.").assertIsDisplayed()
+        shadowOf(app).grantPermissions(
+            Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT,
+        )
+        rule.onNodeWithText("Edzés indítása most").assertIsDisplayed()
 
         // Hibás, majd jó JSON az import képernyőn (ugyanide érkezik a megosztás a Claude appból)
         tab("Programok")
@@ -129,6 +188,8 @@ class AppSmokeTest {
         assertEquals(10 + 81 + 91 + 31, saved.durationS)
         assertEquals("Fekvenyomás: 8×60 kg, 8×60 kg\nPlank: 30 mp", runBlocking { describe(dao.setLogs(saved.id)) })
         assertEquals(saved.id, runBlocking { dao.plannedOn(LocalDate.now().toEpochDay()) }.single().activityId)
+
+        intervalRun()
 
         tab("Előzmények")
         await { runCatching { rule.onNodeWithText("Felsőtest A").assertIsDisplayed() }.isSuccess }
