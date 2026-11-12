@@ -67,6 +67,10 @@ Előzmények → Statisztika → „Megosztás Claude-dal” (vagy „Másolás�
 ha új edzésterv – a szokásos módon, JSON-ként lehet visszahozni az appba. Kiegészítésként a claude.ai Strava connectora
 is használható.
 
+## Claude-projekt
+
+A Claude-chat beállítása (projektutasítás, amit bemásolsz): [`docs/claude-edzo-projekt.md`](docs/claude-edzo-projekt.md).
+
 ## Program formátum
 
 A teljes leírás és példa a prompt szövegében van: [`Program.kt`](app/src/main/java/hu/edzes/model/Program.kt) (`CLAUDE_PROMPT`).
