@@ -18,7 +18,7 @@ import com.github.takahirom.roborazzi.captureScreenRoboImage
 import hu.edzes.data.DONE
 import hu.edzes.model.ProgramParser
 import hu.edzes.player.PlayerService
-import hu.edzes.sync.describe
+import hu.edzes.model.describe
 import hu.edzes.ui.schedule
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -193,9 +193,20 @@ class AppSmokeTest {
 
         tab("Előzmények")
         await { runCatching { rule.onNodeWithText("Felsőtest A").assertIsDisplayed() }.isSuccess }
+        shot("elozmenyek")
         rule.onNodeWithText("Felsőtest A").performClick()
-        shot("elozmeny-reszletek")
-        rule.onNodeWithText("Bezárás").performClick()
+        rule.onNodeWithText("Fekvenyomás: 8×60 kg, 8×60 kg\nPlank: 30 mp").assertIsDisplayed()
+        rule.onNodeWithText("Bezárás").performScrollTo().performClick()
+        rule.onNodeWithText("6 × 400 m / 90 mp").performClick()
+        rule.onNodeWithText("Útvonal").assertIsDisplayed()
+        rule.onNodeWithText("Részidők").assertIsDisplayed()
+        shot("edzes-reszletek")
+        rule.onNodeWithText("Bezárás").performScrollTo().performClick()
+        rule.onNodeWithText("Statisztika").performClick()
+        rule.onNodeWithText("Edzettség és fáradtság").performScrollTo().assertIsDisplayed()
+        shot("statisztika")
+        val report = runBlocking { hu.edzes.ui.buildReport(app, 4) }
+        assertTrue(report, "Futás: 6 × 400 m / 90 mp" in report && "- Gyors: 4" in report && "Súlyzós edzés: Felsőtest A" in report)
         tab("Beállítások")
         shot("beallitasok")
     }

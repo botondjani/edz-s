@@ -5,6 +5,17 @@ import hu.edzes.data.SetLog
 import hu.edzes.model.CLAUDE_PROMPT
 import hu.edzes.model.ProgramParser
 import hu.edzes.model.dates
+import hu.edzes.data.Planned
+import hu.edzes.model.ZoneCoach
+import hu.edzes.model.formSeries
+import hu.edzes.model.haversineM
+import hu.edzes.model.hrHistogram
+import hu.edzes.model.paceSeries
+import hu.edzes.model.targetZone
+import hu.edzes.model.trainingLoad
+import hu.edzes.model.trainingReport
+import hu.edzes.model.zoneOf
+import hu.edzes.model.zoneSeconds
 import hu.edzes.model.intervalWorkout
 import hu.edzes.model.steps
 import hu.edzes.model.summary
@@ -15,7 +26,7 @@ import hu.edzes.sync.Strava
 import hu.edzes.sync.StravaActivity
 import hu.edzes.sync.TrackPoint
 import hu.edzes.sync.buildTcx
-import hu.edzes.sync.describe
+import hu.edzes.model.describe
 import hu.edzes.sync.mergePoints
 import hu.edzes.sync.overlaps
 import hu.edzes.sync.planStrava
@@ -195,6 +206,75 @@ class LogicTest {
         assertEquals("Tabata", gym.title)
         assertEquals(listOf("Munka — 8 × 20 mp / pihenő 10 mp"), gym.summary())
         assertEquals((8 * 20 + 7 * 10) * 1000L, Engine(gym.steps()).remainingMs())   // a záró pihenő elmarad
+    }
+
+    @Test fun `pulzuszonak, hisztogram, terheles`() {
+        assertEquals(listOf(0, 1, 2, 3, 4, 5, 5), listOf(90, 100, 120, 140, 160, 180, 200).map { zoneOf(it, 200) })
+        assertEquals(4, targetZone("1/5. kör · Z4, 4:30/km"))
+        assertEquals(2, targetZone("40 perc · z2"))
+        assertNull(targetZone("könnyű"))
+        // 60 mp 141-en, 30 mp 163-on (10 mp-enkénti mintákkal), majd egy 100 mp-es kihagyás, amiből csak 30 mp számít
+        val samples = (0 until 6).map { it * 10_000L to 141 } + (6 until 9).map { it * 10_000L to 163 } + listOf(90_000L to 182, 190_000L to 150)
+        val hist = hrHistogram(samples)!!
+        assertEquals("140:60,160:30,180:30", hist)
+        assertEquals(listOf(0, 0, 0, 60, 30, 30), zoneSeconds(hist, 200)!!.toList())
+        val a = Activity(source = "app", sport = "run", title = "", startMs = 0, durationS = 600, avgHr = 150, hrHist = hist)
+        assertEquals(1.0 * 3 + 0.5 * 4 + 0.5 * 5, trainingLoad(a, 200), 1e-9)
+        assertEquals(10.0 * 3, trainingLoad(a.copy(hrHist = null), 200), 1e-9)   // átlagpulzus 150 = Z3
+        assertEquals(10.0 * 2, trainingLoad(a, null), 1e-9)
+        val form = formSeries(List(60) { 42.0 })
+        assertTrue(form.last().fatigue > form.last().fitness && form.last().fatigue < 42.0)
+        assertEquals(1.0, form[0].fitness, 1e-9)
+    }
+
+    @Test fun `zonaedzo csak tartos elteresnel szol`() {
+        val c = ZoneCoach()
+        assertNull(c.check(0, 10_000, 5, 2))            // a lépés eleje: türelem
+        assertNull(c.check(50_000, 50_000, 3, 2))       // most lépett ki
+        assertNull(c.check(60_000, 60_000, 3, 2))
+        assertEquals("Pulzus magas, lassíts", c.check(66_000, 66_000, 3, 2))
+        assertNull(c.check(90_000, 90_000, 3, 2))       // 45 mp-en belül nem ismétel
+        assertNull(c.check(100_000, 100_000, 2, 2))     // visszatért
+        assertNull(c.check(120_000, 120_000, 1, 2))
+        assertEquals("Pulzus alacsony, gyorsíts", c.check(136_000, 136_000, 1, 2))
+        assertNull(c.check(200_000, 200_000, 1, null))  // nincs célzóna
+    }
+
+    @Test fun `tempo a GPS pontokbol`() {
+        // másodpercenként 0,0001 fok észak felé = ~11,1 m/s -> ~90 mp/km
+        val pts = (0..100).map { Triple(it * 1000L, 47.0 + it * 0.0001, 19.0) }
+        val pace = paceSeries(pts)
+        assertEquals(3, pace.size)
+        assertEquals(90f, pace[0], 1f)
+        assertEquals(11.1, haversineM(47.0, 19.0, 47.0001, 19.0), 0.1)
+    }
+
+    @Test fun `edzesnaplo Claude-nak`() {
+        val day = LocalDate.of(2026, 11, 11)
+        fun ms(d: LocalDate) = d.atTime(18, 0).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val acts = listOf(
+            Activity(id = 1, source = "app", sport = "run", title = "Intervall", startMs = ms(day), durationS = 3000, distanceM = 10000.0, avgHr = 150, hrHist = "140:1800,170:1200"),
+            Activity(id = 2, source = "hc", sport = "strength", title = "Felsőtest", startMs = ms(day.minusDays(8)), durationS = 3600),
+            Activity(id = 3, source = "hc", sport = "walk", title = "Rejtett", startMs = ms(day), durationS = 600, hidden = true),
+            Activity(id = 4, source = "hc", sport = "run", title = "Régi", startMs = ms(day.minusDays(60)), durationS = 600),
+        )
+        val logs = mapOf(1L to listOf(SetLog(activityId = 1, exercise = "Gyors", durationS = 92, distanceM = 400.0)), 2L to listOf(SetLog(activityId = 2, exercise = "Fekvenyomás", reps = 8, weightKg = 60.0)))
+        val planned = listOf(
+            Planned(programId = 1, date = day.plusDays(2).toEpochDay(), title = "Hosszú futás", sport = "run", workoutJson = "{\"title\":\"Hosszú futás\",\"sport\":\"run\",\"target\":\"90 perc · Z2\"}"),
+            Planned(programId = 1, date = day.minusDays(1).toEpochDay(), title = "Úszás", sport = "swim", workoutJson = "{}", status = "SKIPPED"),
+            Planned(programId = 1, date = day.toEpochDay(), title = "Intervall", sport = "run", workoutJson = "{}", status = "DONE"),
+        )
+        val r = trainingReport(acts, logs, planned, 200, day, 4)
+        for (expected in listOf(
+            "# Edzésnapló — utolsó 4 hét (2026-10-19 – 2026-11-11)",
+            "| 2026-11-09 | 1 | 50:00 | 10,00 km | 0,00 km | 170 | 1/3 |",
+            "| 2026-11-02 | 1 | 1:00:00 | 0,00 km | 0,00 km | 120 | 0/0 |",
+            "### 2026-11-11 — Futás: Intervall\n- idő 50:00, táv 10,00 km, tempó 5:00/km, átlagpulzus 150\n- zónaidők: Z3 30:00, Z4 20:00\n- Gyors: 400 m 1:32",
+            "- Fekvenyomás: 8×60 kg",
+            "- 2026-11-13 — Futás: Hosszú futás (90 perc · Z2)",
+            "## Kihagyott / el nem végzett tervek\n\n- 2026-11-10 — Úszás: Úszás",
+        )) assertTrue("hiányzik: $expected\n$r", expected in r)
+        assertFalse("Rejtett" in r || "Régi" in r)
     }
 
     @Test fun `Strava duplikatum felismerese`() {

@@ -12,9 +12,8 @@ import hu.edzes.data.EdzesDao
 import hu.edzes.data.SKIPPED
 import hu.edzes.data.SetLog
 import hu.edzes.data.Tracks
-import hu.edzes.model.fmtMeters
-import hu.edzes.model.fmtKg
-import hu.edzes.model.fmtSecs
+import hu.edzes.model.describe
+import hu.edzes.model.hrHistogram
 import hu.edzes.model.sportGroup
 import hu.edzes.model.sportName
 import hu.edzes.prefs
@@ -44,20 +43,6 @@ fun planStrava(local: List<Activity>, remote: List<StravaActivity>): StravaPlan 
     }
     return StravaPlan(links, uploads, free)
 }
-
-/** Az elvégzett sorozatok szövegesen, gyakorlatonként egy sor (Strava leírás, előzmények). */
-fun describe(logs: List<SetLog>): String = logs.groupBy { it.exercise }.entries.joinToString("\n") { (exercise, sets) ->
-    "$exercise: " + sets.joinToString(", ") { s ->
-        when {
-            s.distanceM != null && s.durationS != null -> "${fmtMeters(s.distanceM.toInt())} ${clock(s.durationS)}"
-            s.durationS != null -> fmtSecs(s.durationS)
-            s.weightKg != null -> "${s.reps}×${fmtKg(s.weightKg)}"
-            else -> "${s.reps} ism."
-        }
-    }
-}
-
-private fun clock(s: Int) = "%d:%02d".format(s / 60, s % 60)
 
 /** A tevékenységet a napi, azonos sportú, még nem párosított tervhez köti. */
 suspend fun matchPlan(dao: EdzesDao, a: Activity) {
@@ -113,26 +98,32 @@ object Sync {
             val startMs = s.startTime.toEpochMilli()
             val durationS = ChronoUnit.SECONDS.between(s.startTime, s.endTime).toInt()
             val sum = hc.summary(s)
+            val hist = hrHistogram(hc.heartRates(startMs, s.endTime.toEpochMilli()).map { it.timeMs to it.hr!! })
             val i = existing.indexOfFirst { it.hcId == null && overlaps(it.startMs, it.durationS, startMs, durationS) }
             if (i >= 0) {
                 // Ugyanaz az edzés már megvan (az appban mérve vagy Stravából): csak kiegészítjük az óra adataival.
                 val e = existing[i]
                 existing[i] = e.copy(
                     hcId = s.metadata.id, avgHr = e.avgHr ?: sum.avgHr,
-                    calories = e.calories ?: sum.calories, distanceM = e.distanceM ?: sum.distanceM,
+                    calories = e.calories ?: sum.calories, distanceM = e.distanceM ?: sum.distanceM, hrHist = e.hrHist ?: hist,
                 )
                 dao.update(existing[i])
             } else {
                 val sport = Hc.sportOf(s.exerciseType)
                 val a = Activity(
                     source = "hc", sport = sport, title = s.title ?: sportName(sport), startMs = startMs, durationS = durationS,
-                    distanceM = sum.distanceM, avgHr = sum.avgHr, calories = sum.calories, hcId = s.metadata.id,
+                    distanceM = sum.distanceM, avgHr = sum.avgHr, calories = sum.calories, hcId = s.metadata.id, hrHist = hist,
                 )
                 val saved = a.copy(id = dao.insert(a))
                 existing += saved
                 matchPlan(dao, saved)
                 added++
             }
+        }
+        // A korábban (pulzusadat nélkül vagy régebbi verzióval) átvett edzések zónaadatainak pótlása.
+        for (e in existing.filter { it.hrHist == null && it.hcId != null }) {
+            val hist = hrHistogram(hc.heartRates(e.startMs, e.startMs + e.durationS * 1000L).map { it.timeMs to it.hr!! }) ?: continue
+            dao.activity(e.id)?.let { dao.update(it.copy(hrHist = hist)) }
         }
         return "Health Connect: $added új"
     }

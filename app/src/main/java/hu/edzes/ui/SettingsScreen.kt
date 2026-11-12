@@ -111,6 +111,16 @@ fun SettingsScreen() {
         )
 
         Section("Edzés közben")
+        var maxHr by remember { mutableStateOf(prefs.getInt("max_hr", 0).takeIf { it > 0 }?.toString().orEmpty()) }
+        NumberField("Max pulzus (bpm)", maxHr, Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            maxHr = it
+            prefs.edit { putInt("max_hr", it.toIntOrNull()?.takeIf { v -> v in 100..230 } ?: 0) }
+        }
+        Text(
+            "Ebből számolódnak a pulzuszónák (Z1 50–60%, Z2 60–70%, Z3 70–80%, Z4 80–90%, Z5 90%+), a zónaidők és a terhelés. " +
+                "Ha egy szakasznak célzónája van (pl. Z2), élő pulzus mellett az app szól, ha tartósan kilépsz belőle.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
+        )
         PrefSwitch("voice", true, "Hangbemondás (magyar szövegfelolvasó)")
         PrefSwitch("live_hr", true, "Élő pulzus Bluetooth-on")
         Text(

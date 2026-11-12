@@ -30,13 +30,15 @@ class MigrationTest {
             db.execSQL("INSERT INTO SetLog (activityId, exercise, reps, weightKg) VALUES (1, 'Guggolás', 5, 100.0)")
             db.version = 1
         }
-        val dao = Room.databaseBuilder(ctx, EdzesDb::class.java, "regi.db").addMigrations(EdzesDb.MIGRATION_1_2).build().dao()
+        val dao = Room.databaseBuilder(ctx, EdzesDb::class.java, "regi.db").addMigrations(*EdzesDb.MIGRATIONS).build().dao()
         runBlocking {
             dao.insertSetLogs(listOf(SetLog(activityId = 1, exercise = "Gyors", durationS = 90, distanceM = 400.0)))
             assertEquals(
                 listOf(SetLog(1, 1, "Guggolás", 5, 100.0), SetLog(2, 1, "Gyors", durationS = 90, distanceM = 400.0)),
                 dao.setLogs(1),
             )
+            val a = hu.edzes.data.Activity(source = "app", sport = "run", title = "F", startMs = 1, durationS = 2, hrHist = "140:60")
+            assertEquals(a.copy(id = 1), dao.activity(dao.insert(a)))
         }
     }
 }

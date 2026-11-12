@@ -21,7 +21,7 @@ import kotlinx.coroutines.SupervisorJob
 import java.util.concurrent.TimeUnit
 
 class App : Application(), Configuration.Provider {
-    val db by lazy { Room.databaseBuilder(this, EdzesDb::class.java, "edzes.db").addMigrations(EdzesDb.MIGRATION_1_2).build() }
+    val db by lazy { Room.databaseBuilder(this, EdzesDb::class.java, "edzes.db").addMigrations(*EdzesDb.MIGRATIONS).build() }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     override val workManagerConfiguration get() = Configuration.Builder().build()
 

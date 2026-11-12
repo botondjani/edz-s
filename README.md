@@ -15,6 +15,12 @@ Személyes, offline-first Android edzésapp. Nincs saját szerver: minden adat a
 - **Health Connect**: az órával (Fitbit / Google Health) mért edzések, pulzus, táv, útvonal átvétele; automatikus
   párosítás a napi tervvel. Ha ugyanazt az edzést az app is mérte, a kettőt összevonja. Az úszást csak az óra méri.
 - **Strava**: kétirányú szinkron duplikáció-szűréssel. A konditermi edzés leírásába a gyakorlatok és súlyok is felkerülnek.
+- **Pulzuszónák**: a Beállításokban megadott max pulzusból; edzés közben látszik az aktuális zóna, és ha a szakasznak
+  célzónája van (pl. `"target": "Z2"`), az app szól, ha tartósan kilépsz belőle.
+- **Edzés részletei**: útvonal, tempó- és pulzusgörbe, zónaidők, részidők / sorozatok.
+- **Statisztika** (Előzmények → Statisztika): heti edzésidő sportonként, heti zónaidők, edzettség–fáradtság görbe.
+- **Elemzés Claude-dal**: egy gombbal elemzésre kész edzésnaplót (heti összesítő, edzések, terv) oszt meg a Claude appnak
+  vagy másol a vágólapra.
 - **Mentés / visszaállítás**: teljes adatbázis egy JSON fájlban (Claude-nak is feltölthető elemzésre).
 
 ## Telepítés
@@ -57,8 +63,9 @@ Az appban mért edzés feltöltésével az app legfeljebb fél órát vár, hogy
 
 ## Elemzés Claude-ban
 
-Kapcsold be a Strava connectort a claude.ai beállításaiban – Claude onnan minden edzést lát (a súlyzós edzések
-részleteit a leírásból). Alternatíva: Beállítások → „Mentés fájlba”, és a JSON feltöltése a beszélgetésbe.
+Előzmények → Statisztika → „Megosztás Claude-dal” (vagy „Másolás”, és beillesztés egy beszélgetésbe). A választ –
+ha új edzésterv – a szokásos módon, JSON-ként lehet visszahozni az appba. Kiegészítésként a claude.ai Strava connectora
+is használható.
 
 ## Program formátum
 

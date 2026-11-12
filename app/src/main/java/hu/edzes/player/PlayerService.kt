@@ -36,7 +36,11 @@ import hu.edzes.model.Step
 import hu.edzes.model.Workout
 import hu.edzes.model.fmtMeters
 import hu.edzes.model.fmtSecs
+import hu.edzes.model.ZoneCoach
+import hu.edzes.model.hrHistogram
 import hu.edzes.model.isCardio
+import hu.edzes.model.targetZone
+import hu.edzes.model.zoneOf
 import hu.edzes.model.steps
 import hu.edzes.prefs
 import hu.edzes.data.Tracks
@@ -66,6 +70,8 @@ data class PlayerState(
     val paceSPerKm: Int? = null,     // pillanatnyi tempó (az utolsó ~30 mp alapján)
     val heartRate: Int? = null,      // élő pulzus Bluetooth-ról
     val remainingS: Long? = null,    // hátralévő idő, ha minden hátralévő lépés időre megy
+    val zone: Int? = null,           // a pillanatnyi pulzuszóna, ha van max pulzus beállítva
+    val targetZone: Int? = null,     // az aktuális lépés (vagy az egész edzés) célzónája
 )
 
 /** A futó edzés elérése a felületről. Minden hívás a fő szálon történik. */
@@ -118,6 +124,18 @@ class PlayerService : Service() {
     private var hrSum = 0L
     private var hrCount = 0
     private var lastHrPointMs = 0L
+    private val hrSamples = mutableListOf<Pair<Long, Int>>()
+    private val coach = ZoneCoach()
+    private val maxHr get() = prefs.getInt("max_hr", 0).takeIf { it > 0 }
+
+    /** Az aktuális lépés célzónája; szakaszok nélküli edzésnél az edzés céljából. Pihenőnél nincs. */
+    private fun targetZone(): Int? = engine.current.let { step ->
+        when {
+            step == null -> targetZone(workout.target).takeIf { engine.steps.isEmpty() }
+            step.rest -> null
+            else -> targetZone(step.info)
+        }
+    }
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -180,7 +198,14 @@ class PlayerService : Service() {
         if (prefs.getBoolean("live_hr", true)) hrMonitor = HeartRateMonitor(this) { bpm ->
             heartRate = bpm
             heartRateAtMs = SystemClock.elapsedRealtime()
-            if (!engine.paused) { hrSum += bpm; hrCount++ }
+            if (!engine.paused) {
+                hrSum += bpm; hrCount++
+                hrSamples += System.currentTimeMillis() to bpm
+                val max = maxHr
+                if (max != null) coach.check(
+                    SystemClock.elapsedRealtime(), if (engine.current == null) engine.totalMs else engine.stepMs, zoneOf(bpm, max), targetZone(),
+                )?.let { say(it, flush = false) }
+            }
         }.also { it.start() }
 
         wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "edzes:player")
@@ -227,6 +252,7 @@ class PlayerService : Service() {
             workout, engine.index, engine.steps.size, engine.current, engine.next,
             engine.stepMs, engine.totalMs, engine.stepDistM, engine.paused, gps,
             totalDistM, pace(), heartRate, engine.remainingMs()?.let { (it + 999) / 1000 },
+            heartRate?.let { hr -> maxHr?.let { zoneOf(hr, it) } }, targetZone(),
         )
         if (shownStep != engine.index) {
             shownStep = engine.index
@@ -281,10 +307,11 @@ class PlayerService : Service() {
         val distance = totalDistM.takeIf { it > 0 }
         val avgHr = if (hrCount > 0) (hrSum / hrCount).toInt() else null
         val points = track.toList()
+        val hist = hrHistogram(hrSamples)
         if (save) ctx.app.scope.launch {
             val dao = ctx.dao
             val id = dao.insert(
-                Activity(source = "app", sport = w.sport, title = w.title, startMs = start, durationS = durationS, distanceM = distance, avgHr = avgHr)
+                Activity(source = "app", sport = w.sport, title = w.title, startMs = start, durationS = durationS, distanceM = distance, avgHr = avgHr, hrHist = hist)
             )
             dao.insertSetLogs(logs.map { it.copy(activityId = id) })
             Tracks.write(ctx, id, points)

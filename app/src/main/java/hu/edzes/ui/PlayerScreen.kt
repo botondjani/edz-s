@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -93,7 +94,12 @@ fun PlayerScreen(state: PlayerState) {
                     Metric("Táv (km)", if (state.gps) "%.2f".format(HU, state.totalDistM / 1000) else "–", Modifier.weight(1f))
                     Metric(if (state.workout.sport == "bike") "km/h" else "Tempó (/km)", fmtPace(state.paceSPerKm, state.workout.sport), Modifier.weight(1f))
                 }
-                Metric("Pulzus", state.heartRate?.toString() ?: "–", Modifier.weight(1f))
+                // Célzónán kívül a pulzus pirossal jelenik meg.
+                val off = state.zone != null && state.targetZone != null && state.zone != state.targetZone
+                Metric(
+                    "Pulzus" + (state.zone?.let { " · Z$it" } ?: "") + (state.targetZone?.let { " (cél Z$it)" } ?: ""),
+                    state.heartRate?.toString() ?: "–", Modifier.weight(1f), if (off) MaterialTheme.colorScheme.error else Color.Unspecified,
+                )
             }
             if (cardio && !state.gps) Text(
                 "Nincs GPS (engedély vagy helymeghatározás kikapcsolva): táv és tempó nem mérhető.",
@@ -162,8 +168,8 @@ fun PlayerScreen(state: PlayerState) {
 }
 
 @Composable
-private fun Metric(label: String, value: String, modifier: Modifier) = Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-    Text(value, fontSize = 40.sp, fontWeight = FontWeight.Medium)
+private fun Metric(label: String, value: String, modifier: Modifier, color: Color = Color.Unspecified) = Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    Text(value, fontSize = 40.sp, fontWeight = FontWeight.Medium, color = color)
     Text(label, style = MaterialTheme.typography.labelMedium)
 }
 

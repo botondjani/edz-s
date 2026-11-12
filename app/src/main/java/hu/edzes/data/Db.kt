@@ -58,6 +58,7 @@ data class Activity(
     val stravaError: String? = null,
     val needsRoute: Boolean = false,   // a Health Connect útvonalához még kell a felhasználó engedélye
     val hidden: Boolean = false,       // importált edzés "törlése": rejtve marad, hogy a szinkron ne hozza vissza
+    val hrHist: String? = null,        // pulzus-hisztogram (lásd hrHistogram), a zónaidőkhöz
 )
 
 @Serializable
@@ -134,7 +135,7 @@ interface EdzesDao {
     }
 }
 
-@Database(entities = [Program::class, Planned::class, Activity::class, SetLog::class], version = 2, exportSchema = false)
+@Database(entities = [Program::class, Planned::class, Activity::class, SetLog::class], version = 3, exportSchema = false)
 abstract class EdzesDb : RoomDatabase() {
     abstract fun dao(): EdzesDao
 
@@ -142,5 +143,9 @@ abstract class EdzesDb : RoomDatabase() {
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) = db.execSQL("ALTER TABLE SetLog ADD COLUMN distanceM REAL")
         }
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) = db.execSQL("ALTER TABLE Activity ADD COLUMN hrHist TEXT")
+        }
+        val MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
     }
 }
