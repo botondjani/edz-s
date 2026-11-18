@@ -10,6 +10,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -46,6 +48,8 @@ import hu.edzes.data.PLANNED
 import hu.edzes.data.Planned
 import hu.edzes.data.SKIPPED
 import hu.edzes.model.Workout
+import hu.edzes.model.asCircuit
+import hu.edzes.model.canCircuit
 import hu.edzes.model.isCardio
 import hu.edzes.model.sportEmoji
 import hu.edzes.player.HeartRateMonitor
@@ -126,6 +130,7 @@ fun Section(text: String) = Text(
     modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PlannedCard(p: Planned, onStart: (Workout, Long?) -> Unit, showDate: Boolean = false) {
     val ctx = LocalContext.current
@@ -159,9 +164,11 @@ fun PlannedCard(p: Planned, onStart: (Workout, Long?) -> Unit, showDate: Boolean
             }
             workout.notes?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             workout.summary().forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
-            if (p.status == PLANNED) Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (p.status == PLANNED) FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Úszást a telefon nem tud mérni: azt az óra rögzíti, és a Health Connectből érkezik.
                 if (p.sport != "swim") TextButton(onClick = { onStart(workout, p.id) }) { Text("▶ Indítás") }
+                // Az egymás utáni, azonos sorozatszámú gyakorlatok körökben is mehetnek (A, B, C, A, B, C…).
+                if (workout.canCircuit()) TextButton(onClick = { onStart(workout.asCircuit(), p.id) }) { Text("▶ Körökben") }
                 TextButton(onClick = { save(p.copy(status = DONE)) }) { Text("Kész") }
                 TextButton(onClick = { save(p.copy(status = SKIPPED)) }) { Text("Kihagyom") }
             }

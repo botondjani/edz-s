@@ -36,6 +36,7 @@ import hu.edzes.model.Step
 import hu.edzes.model.Workout
 import hu.edzes.model.fmtMeters
 import hu.edzes.model.fmtSecs
+import hu.edzes.model.Splits
 import hu.edzes.model.ZoneCoach
 import hu.edzes.model.hrHistogram
 import hu.edzes.model.isCardio
@@ -72,6 +73,9 @@ data class PlayerState(
     val remainingS: Long? = null,    // hátralévő idő, ha minden hátralévő lépés időre megy
     val zone: Int? = null,           // a pillanatnyi pulzuszóna, ha van max pulzus beállítva
     val targetZone: Int? = null,     // az aktuális lépés (vagy az egész edzés) célzónája
+    val hrStatus: String? = null,    // a pulzusmérő kapcsolatának állapota (null = élő pulzus kikapcsolva)
+    val splits: List<Int> = emptyList(),   // kilométerenkénti (kerékpárnál 5 km-es) részidők, mp
+    val splitM: Int = 1000,
 )
 
 /** A futó edzés elérése a felületről. Minden hívás a fő szálon történik. */
@@ -117,7 +121,10 @@ class PlayerService : Service() {
     private var totalDistM = 0.0
     private val track = mutableListOf<TrackPoint>()
     private val recent = ArrayDeque<Pair<Long, Double>>()   // (edzésidő ms, össztáv m) a tempóhoz
-    private var nextKm = 1
+    private lateinit var splits: Splits
+    private var hrStatus: String? = null
+    private var hrEvery = false
+    private var nextHrSayMs = HR_SAY_MS
     private var hrMonitor: HeartRateMonitor? = null
     private var heartRate: Int? = null
     private var heartRateAtMs = 0L
@@ -148,6 +155,10 @@ class PlayerService : Service() {
             }
             handle(engine.tick(now - lastTick))
             lastTick = now
+            if (hrEvery && engine.totalMs >= nextHrSayMs) {
+                nextHrSayMs += HR_SAY_MS
+                heartRate?.let { say("Pulzus $it" + (zoneNow()?.let { z -> ", zóna $z" } ?: ""), flush = false) }
+            }
             handler.postDelayed(this, 200)
         }
     }
@@ -164,13 +175,20 @@ class PlayerService : Service() {
         totalDistM += d
         recent += engine.totalMs to totalDistM
         while (recent.size > 2 && engine.totalMs - recent.first().first > 30_000) recent.removeFirst()
-        val kmStep = if (workout.sport == "bike") 5 else 1
-        if (totalDistM >= nextKm * 1000) {
-            val pace = (engine.totalMs / totalDistM).toInt()   // mp/km
-            say("$nextKm kilométer, átlagtempó ${fmtSecs(pace)}", flush = false)
-            nextKm += kmStep
-        }
+        splits.update(totalDistM, engine.totalMs)?.let(::announceSplit)
         handle(engine.addDistance(d.toDouble()))
+    }
+
+    private fun zoneNow() = heartRate?.let { hr -> maxHr?.let { zoneOf(hr, it) } }
+
+    /** Részidő bemondása: futásnál a kilométer ideje és az átlagtempó, kerékpárnál a szakasz ideje és az átlagsebesség. */
+    private fun announceSplit(seconds: Int) {
+        val km = splits.times.size * splits.splitM / 1000
+        val avg = if (workout.sport == "bike") "átlag ${"%.1f".format(totalDistM / 1000 / (engine.totalMs / 3_600_000.0)).replace('.', ',')} kilométer per óra"
+        else "átlagtempó ${fmtSecs((engine.totalMs / totalDistM).toInt())}"
+        val last = if (workout.sport == "bike") "utolsó ${splits.splitM / 1000} kilométer" else "ez a kilométer"
+        val hr = heartRate?.let { ", pulzus $it" } ?: ""
+        say("$km kilométer. $last ${fmtSecs(seconds)}, $avg$hr", flush = false)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -185,17 +203,19 @@ class PlayerService : Service() {
         lastTick = SystemClock.elapsedRealtime()
         Player.service = this
 
-        nextKm = if (w.sport == "bike") 5 else 1
+        splits = Splits(if (w.sport == "bike") 5000 else 1000)
+        hrEvery = prefs.getBoolean("hr_every", false)
+        val liveHr = prefs.getBoolean("live_hr", true)
         val wantsGps = (isCardio(w.sport) || engine.steps.any { it.distanceM != null }) &&
             checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val type = when {
             wantsGps -> ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             Build.VERSION.SDK_INT >= 34 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             else -> 0
-        }
+        } or if (liveHr && HeartRateMonitor.hasPermission(this)) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(), type)
         if (wantsGps) startGps()
-        if (prefs.getBoolean("live_hr", true)) hrMonitor = HeartRateMonitor(this) { bpm ->
+        if (liveHr) hrMonitor = HeartRateMonitor(this, onStatus = { hrStatus = it; publish() }) { bpm ->
             heartRate = bpm
             heartRateAtMs = SystemClock.elapsedRealtime()
             if (!engine.paused) {
@@ -252,7 +272,7 @@ class PlayerService : Service() {
             workout, engine.index, engine.steps.size, engine.current, engine.next,
             engine.stepMs, engine.totalMs, engine.stepDistM, engine.paused, gps,
             totalDistM, pace(), heartRate, engine.remainingMs()?.let { (it + 999) / 1000 },
-            heartRate?.let { hr -> maxHr?.let { zoneOf(hr, it) } }, targetZone(),
+            zoneNow(), targetZone(), hrStatus, splits.times.toList(), splits.splitM,
         )
         if (shownStep != engine.index) {
             shownStep = engine.index
@@ -302,7 +322,11 @@ class PlayerService : Service() {
         val w = workout
         val pid = plannedId
         val start = startWallMs
-        val logs = log.toList()
+        // Kilométerenkénti részidők (és a le nem zárt utolsó szakasz) a naplóba, a Strava-leíráshoz és a részletekhez.
+        val splitLogs = if (!isCardio(workout.sport) || !gps) emptyList() else
+            splits.times.map { SetLog(activityId = 0, exercise = SPLIT, durationS = it, distanceM = splits.splitM.toDouble()) } +
+                listOfNotNull(splits.rest(totalDistM, engine.totalMs)?.let { (m, s) -> SetLog(activityId = 0, exercise = SPLIT, durationS = s, distanceM = m) })
+        val logs = log.toList() + splitLogs
         val ctx = applicationContext
         val distance = totalDistM.takeIf { it > 0 }
         val avgHr = if (hrCount > 0) (hrSum / hrCount).toInt() else null
@@ -339,6 +363,8 @@ class PlayerService : Service() {
 
     companion object {
         const val NOTIFICATION_ID = 1
+        const val SPLIT = "Kilométer"
+        private const val HR_SAY_MS = 150_000L
         private val LAST_ROUND = Regex("(\\d+)/(\\d+)\\. kör(?!.*kör)")
     }
 }

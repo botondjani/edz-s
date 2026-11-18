@@ -46,8 +46,10 @@ Mindig **egyetlen JSON kódblokkot** adj, benne semmi komment. A JSON előtt/ut�
           { "type": "sets", "exercise": "Fekvenyomás", "sets": 4, "reps": 8, "weight_kg": 60, "rest_s": 120 },
           { "type": "timed", "exercise": "Plank", "duration_s": 60, "sets": 3, "rest_s": 30 },
           { "type": "interval", "name": "Tabata burpee", "work_s": 20, "rest_s": 10, "rounds": 8 },
-          { "type": "repeat", "times": 3, "blocks": [
-              { "type": "sets", "exercise": "Húzódzkodás", "sets": 1, "reps": "max", "rest_s": 60 } ] }
+          { "type": "repeat", "times": 3, "rest_s": 90, "blocks": [
+              { "type": "sets", "exercise": "Húzódzkodás", "sets": 1, "reps": "max", "rest_s": 20 },
+              { "type": "sets", "exercise": "Fekvőtámasz", "sets": 1, "reps": 15, "rest_s": 20 },
+              { "type": "timed", "exercise": "Plank", "duration_s": 45 } ] }
         ] } },
     { "week": 1, "weekday": "WED", "workout": {
         "title": "Intervall futás", "sport": "run",
@@ -75,7 +77,10 @@ Mindig **egyetlen JSON kódblokkot** adj, benne semmi komment. A JSON előtt/ut�
   - `timed`: `exercise`, `duration_s`, opcionális `sets`, `rest_s`.
   - `interval`: `work_s` **vagy** `work_m` (pontosan az egyik), `rest_s`, `rounds`, opcionális `name`, `target`.
   - `segment`: `name`, és `duration_s` **vagy** `distance_m` (pontosan az egyik), opcionális `target`.
-  - `repeat`: `times`, `blocks` (beágyazott blokkok).
+  - `repeat`: `times`, `blocks` (beágyazott blokkok), opcionális `rest_s` = pihenő a körök között.
+- **Köredzés** (A, B, C, majd újra A, B, C): `repeat` blokk, `times` = körök száma, benne minden gyakorlat `"sets": 1`,
+  a gyakorlatok közti pihenő a gyakorlat `rest_s`-e, a körök közti a `repeat` `rest_s`-e. Egy `sets` blokk `"sets": 3`
+  értéke azt jelenti, hogy a gyakorlat mindhárom sorozata egymás után megy, és csak utána jön a következő gyakorlat.
 - Idő másodpercben, táv méterben, súly kilogrammban; számokat ne tegyél idézőjelek közé (kivéve `reps` szövegként).
 - `target`: szöveg (pl. `"Z4, 4:30/km"`). Ha **`Z1`–`Z5`** szerepel benne, az app élő pulzusnál ebből ad zónafigyelmeztetést.
   Blokkok nélküli kardióedzésnél a `target` objektum is lehet: `duration_min`, `distance_km`, `hr_zone`, `pace`, `note`.

@@ -67,6 +67,25 @@ fun formSeries(dailyLoad: List<Double>): List<Form> {
     }
 }
 
+/** Kilométerenkénti (kerékpárnál 5 km-enkénti) részidők a megtett táv és az eltelt edzésidő alapján. */
+class Splits(val splitM: Int) {
+    val times = mutableListOf<Int>()   // másodperc szakaszonként
+    private var lastMs = 0L
+
+    /** Az új részidő másodpercben, ha most lépte át a következő szakaszhatárt. */
+    fun update(totalDistM: Double, totalMs: Long): Int? {
+        if (totalDistM < (times.size + 1) * splitM.toDouble()) return null
+        val s = ((totalMs - lastMs) / 1000).toInt()
+        lastMs = totalMs
+        times += s
+        return s
+    }
+
+    /** A befejezéskor még le nem zárt utolsó szakasz (táv, idő), ha legalább 100 m. */
+    fun rest(totalDistM: Double, totalMs: Long): Pair<Double, Int>? =
+        (totalDistM - times.size * splitM.toDouble()).takeIf { it >= 100 }?.let { it to ((totalMs - lastMs) / 1000).toInt() }
+}
+
 /** Szól, ha a pulzus tartósan a célzónán kívül van. A lépés első 45 mp-ében türelmes (a pulzus késve követ). */
 class ZoneCoach {
     private var outSince: Long? = null

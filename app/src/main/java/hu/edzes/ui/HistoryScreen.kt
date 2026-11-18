@@ -48,6 +48,7 @@ import hu.edzes.model.fmtMeters
 import hu.edzes.model.paceSeries
 import hu.edzes.model.sportEmoji
 import hu.edzes.model.zoneSeconds
+import hu.edzes.player.PlayerService
 import hu.edzes.prefs
 import hu.edzes.sync.Hc
 import hu.edzes.sync.Strava
@@ -200,9 +201,13 @@ fun ActivityDialog(a: Activity, onDismiss: () -> Unit) {
                 val laps = logs.filter { it.distanceM != null && it.durationS != null }
                 if (laps.isNotEmpty()) {
                     Section("Részidők")
+                    var splitTotal = 0.0
                     laps.forEach { lap ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                            Text(lap.exercise, Modifier.weight(2f))
+                            // A kilométeres részidőket a megtett össztávval jelöljük: "1 km", "2 km", … "5,34 km".
+                            val label = if (lap.exercise != PlayerService.SPLIT) lap.exercise
+                            else { splitTotal += lap.distanceM!!; "${fmtMeters(splitTotal.toInt())}-ig" }
+                            Text(label, Modifier.weight(2f))
                             Text(fmtMeters(lap.distanceM!!.toInt()), Modifier.weight(1f))
                             Text(fmtClock(lap.durationS!!.toLong()), Modifier.weight(1f))
                             Text(

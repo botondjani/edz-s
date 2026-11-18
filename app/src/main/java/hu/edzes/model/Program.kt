@@ -174,7 +174,10 @@ object ProgramParser {
                 "repeat" -> {
                     val inner = blocks(o, path)
                     if (inner != null && inner.isEmpty()) errors += "$path: hiányzik vagy üres a \"blocks\" lista"
-                    Block("repeat", sets = int(o, path, "times", min = 1) ?: 1, blocks = inner.orEmpty())
+                    Block(
+                        "repeat", sets = int(o, path, "times", min = 1) ?: 1, blocks = inner.orEmpty(),
+                        restS = int(o, path, "rest_s", required = false) ?: 0,
+                    )
                 }
                 null -> null
                 else -> { errors += "$path.type: sets/timed/interval/segment/repeat egyike kell, de \"$type\" van"; null }
@@ -205,7 +208,7 @@ private fun Block.summary(): String = when (type) {
     "timed" -> "$name — $sets × ${fmtSecs(durationS ?: 0)}" + restText()
     "interval" -> "$name — $sets × ${length()} / pihenő ${fmtSecs(restS)}" + targetText()
     "segment" -> "$name — ${length()}" + targetText()
-    else -> "$sets× [" + blocks.joinToString(" + ") { it.summary() } + "]"
+    else -> "$sets kör: [" + blocks.joinToString(" + ") { it.summary() } + "]" + if (restS > 0) ", körök közt ${fmtSecs(restS)}" else ""
 }
 
 private fun Block.length() = durationS?.let(::fmtSecs) ?: fmtMeters(distanceM ?: 0)
@@ -228,24 +231,55 @@ data class Step(
 
 fun Workout.steps(): List<Step> = flatten(blocks, "").let { if (it.lastOrNull()?.rest == true) it.dropLast(1) else it }
 
+/** "1/3. kör · " + "2/4. sorozat" + "8 ism." – a hiányzó részek nélkül, egy sorozatnál a sorozatszámot elhagyva. */
+private fun info(prefix: String, i: Int, of: Int, extra: String?) =
+    listOfNotNull(prefix.removeSuffix(" · ").ifEmpty { null }, "$i/$of. sorozat".takeIf { of > 1 }, extra).joinToString(" · ")
+
 fun flatten(blocks: List<Block>, prefix: String = ""): List<Step> = blocks.flatMap { b ->
     val rest = if (b.restS > 0) Step("Pihenő", rest = true, durationS = b.restS) else null
     when (b.type) {
         "sets" -> (1..b.sets).flatMap { i ->
             val plan = b.reps + " ism." + (b.weightKg?.let { " × ${fmtKg(it)}" } ?: "")
-            listOfNotNull(Step(b.name, "$prefix$i/${b.sets}. sorozat · $plan", exercise = b.name, reps = b.reps, weightKg = b.weightKg), rest)
+            listOfNotNull(Step(b.name, info(prefix, i, b.sets, plan), exercise = b.name, reps = b.reps, weightKg = b.weightKg), rest)
         }
         "timed" -> (1..b.sets).flatMap { i ->
-            listOfNotNull(Step(b.name, "$prefix$i/${b.sets}. sorozat", durationS = b.durationS, exercise = b.name), rest)
+            listOfNotNull(Step(b.name, info(prefix, i, b.sets, null), durationS = b.durationS, exercise = b.name), rest)
         }
         "interval" -> (1..b.sets).flatMap { i ->
             listOfNotNull(Step(b.name, "$prefix$i/${b.sets}. kör" + (b.target?.let { " · $it" } ?: ""), durationS = b.durationS, distanceM = b.distanceM), rest)
         }
         "segment" -> listOf(Step(b.name, prefix + b.target.orEmpty(), durationS = b.durationS, distanceM = b.distanceM))
-        "repeat" -> (1..b.sets).flatMap { i -> flatten(b.blocks, "$prefix$i/${b.sets}. kör · ") }
+        "repeat" -> (1..b.sets).flatMap { i ->
+            val round = flatten(b.blocks, "$prefix$i/${b.sets}. kör · ")
+            // Körök közti pihenő: az utolsó gyakorlat saját pihenője helyett, az utolsó kör után nincs.
+            if (b.restS <= 0) round
+            else (if (round.lastOrNull()?.rest == true) round.dropLast(1) else round) +
+                listOfNotNull(Step("Pihenő", "$i. kör vége", rest = true, durationS = b.restS).takeIf { i < b.sets })
+        }
         else -> emptyList()
     }
 }
+
+/**
+ * Köredzés: az egymást követő, azonos sorozatszámú (legalább 2) gyakorlatot körökbe szervezi – A, B, C, majd újra A, B, C –
+ * ahelyett, hogy egy gyakorlat összes sorozata menne egymás után. Ha nincs ilyen csoport, változatlan.
+ */
+fun Workout.asCircuit(): Workout {
+    val out = mutableListOf<Block>()
+    var i = 0
+    while (i < blocks.size) {
+        val b = blocks[i]
+        var j = i
+        if (b.type in setOf("sets", "timed") && b.sets > 1)
+            while (j + 1 < blocks.size && blocks[j + 1].type in setOf("sets", "timed") && blocks[j + 1].sets == b.sets) j++
+        if (j > i) out += Block("repeat", sets = b.sets, blocks = blocks.subList(i, j + 1).map { it.copy(sets = 1) })
+        else out += b
+        i = j + 1
+    }
+    return copy(blocks = out)
+}
+
+fun Workout.canCircuit() = asCircuit() != this
 
 /** Az intervall-szerkesztő edzése: bemelegítés, N × (munka idő vagy táv szerint + pihenő), levezetés. Teremben csak a körök. */
 fun intervalWorkout(
@@ -274,8 +308,10 @@ const val CLAUDE_PROMPT = """Készíts edzésprogramot az alábbi JSON formátum
           { "type": "sets", "exercise": "Fekvenyomás", "sets": 4, "reps": 8, "weight_kg": 60, "rest_s": 120 },
           { "type": "timed", "exercise": "Plank", "duration_s": 60, "sets": 3, "rest_s": 30 },
           { "type": "interval", "name": "Tabata burpee", "work_s": 20, "rest_s": 10, "rounds": 8 },
-          { "type": "repeat", "times": 3, "blocks": [
-              { "type": "sets", "exercise": "Húzódzkodás", "sets": 1, "reps": "max", "rest_s": 60 } ] }
+          { "type": "repeat", "times": 3, "rest_s": 90, "blocks": [
+              { "type": "sets", "exercise": "Húzódzkodás", "sets": 1, "reps": "max", "rest_s": 20 },
+              { "type": "sets", "exercise": "Fekvőtámasz", "sets": 1, "reps": 15, "rest_s": 20 },
+              { "type": "timed", "exercise": "Plank", "duration_s": 45 } ] }
         ] } },
     { "week": 1, "weekday": "WED", "workout": {
         "title": "Intervall futás", "sport": "run",
@@ -295,7 +331,8 @@ const val CLAUDE_PROMPT = """Készíts edzésprogramot az alábbi JSON formátum
 Szabályok:
 - sport: run | bike | swim | strength | hiit | walk | other
 - weekday: MON | TUE | WED | THU | FRI | SAT | SUN; week: 1-től számozva. Minden hét minden edzését írd ki külön (a progresszióval együtt).
-- Blokktípusok: sets (exercise, sets, reps, opcionális weight_kg és rest_s), timed (exercise, duration_s, opcionális sets és rest_s), interval (name, work_s VAGY work_m, rest_s, rounds, opcionális target), segment (name, és duration_s VAGY distance_m, opcionális target), repeat (times, blocks).
+- Blokktípusok: sets (exercise, sets, reps, opcionális weight_kg és rest_s), timed (exercise, duration_s, opcionális sets és rest_s), interval (name, work_s VAGY work_m, rest_s, rounds, opcionális target), segment (name, és duration_s VAGY distance_m, opcionális target), repeat (times, blocks, opcionális rest_s = pihenő a körök között).
+- Köredzés (A, B, C, majd újra A, B, C): repeat blokk, times = a körök száma, benne minden gyakorlat "sets": 1. A sets blokk "sets" > 1 értéke azt jelenti, hogy az összes sorozat egymás után megy, mielőtt a következő gyakorlat jön.
 - A reps lehet szám vagy szöveg (pl. "8-10", "max"). Idő másodpercben, táv méterben, súly kg-ban.
 - Blokkok nélküli kardió edzésnél a target adja a célt: duration_min, distance_km, hr_zone, pace, note.
 

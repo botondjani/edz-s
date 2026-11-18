@@ -5,6 +5,11 @@ import hu.edzes.data.SetLog
 import hu.edzes.model.CLAUDE_PROMPT
 import hu.edzes.model.ProgramParser
 import hu.edzes.model.dates
+import hu.edzes.model.Block
+import hu.edzes.model.Splits
+import hu.edzes.model.Workout
+import hu.edzes.model.asCircuit
+import hu.edzes.model.canCircuit
 import hu.edzes.data.Planned
 import hu.edzes.model.ZoneCoach
 import hu.edzes.model.formSeries
@@ -79,11 +84,22 @@ class LogicTest {
     @Test fun `a blokkok lepesekre bomlanak`() {
         val strength = example.program!!.days[0].workout.steps()
         // 4 sorozat + 4 pihenő, 3 plank + 3 pihenő, 8 tabata kör + 8 pihenő, 3 húzódzkodás + 2 pihenő (a záró pihenő elmarad)
-        assertEquals(8 + 6 + 16 + 5, strength.size)
+        // 4 sorozat + 4 pihenő, 3 plank + 3 pihenő, 8 tabata kör + 8 pihenő, 3 kör × (3 gyakorlat + 2 pihenő) + 2 körpihenő
+        assertEquals(8 + 6 + 16 + 3 * 5 + 2, strength.size)
         assertEquals("1/4. sorozat · 8 ism. × 60 kg", strength[0].info)
         assertTrue(strength[0].manual && strength[1].rest && strength[1].durationS == 120)
         assertFalse(strength.last().rest)
-        assertEquals("3/3. kör · 1/1. sorozat · max ism.", strength.last().info)
+        val circuit = strength.drop(30)
+        assertEquals(
+            listOf("Húzódzkodás", "Pihenő", "Fekvőtámasz", "Pihenő", "Plank", "Pihenő", "Húzódzkodás"),
+            circuit.take(7).map { it.title },
+        )
+        assertEquals("1/3. kör · max ism.", circuit[0].info)
+        assertEquals(20, circuit[1].durationS)
+        assertEquals("1. kör vége", circuit[5].info)
+        assertEquals(90, circuit[5].durationS)
+        assertEquals("3/3. kör", strength.last().info)
+        assertEquals("Plank", strength.last().title)
 
         val run = example.program!!.days[1].workout.steps()
         assertEquals(1 + 6 * 2 + 5 * 2 + 1, run.size)
@@ -275,6 +291,40 @@ class LogicTest {
             "## Kihagyott / el nem végzett tervek\n\n- 2026-11-10 — Úszás: Úszás",
         )) assertTrue("hiányzik: $expected\n$r", expected in r)
         assertFalse("Rejtett" in r || "Régi" in r)
+    }
+
+    @Test fun `kozredzes - gyakorlatonkenti sorozatokbol korok`() {
+        fun sets(name: String, n: Int, rest: Int = 30) = Block("sets", name, n, "10", restS = rest)
+        val w = Workout("Kör", "strength", blocks = listOf(
+            Block("segment", "Bemelegítés", durationS = 300),
+            sets("Guggolás", 3), sets("Fekvőtámasz", 3), Block("timed", "Plank", 3, durationS = 40, restS = 60),
+            sets("Húzódzkodás", 4),
+        ))
+        assertTrue(w.canCircuit())
+        val c = w.asCircuit()
+        assertEquals(listOf("segment", "repeat", "sets"), c.blocks.map { it.type })
+        assertEquals(3, c.blocks[1].sets)
+        assertEquals(listOf("Guggolás", "Fekvőtámasz", "Plank"), c.blocks[1].blocks.map { it.name })
+        assertTrue(c.blocks[1].blocks.all { it.sets == 1 })
+        assertEquals(
+            listOf("Bemelegítés", "Guggolás", "Pihenő", "Fekvőtámasz", "Pihenő", "Plank", "Pihenő", "Guggolás"),
+            c.steps().take(8).map { it.title },
+        )
+        assertEquals("2/3. kör · 10 ism.", c.steps()[7].info)
+        // Egyetlen gyakorlat vagy eltérő sorozatszám: nincs mit körbe szervezni.
+        assertFalse(Workout("A", "strength", blocks = listOf(sets("Guggolás", 3), sets("Evezés", 4))).canCircuit())
+        assertEquals(listOf("3 kör: [Guggolás — 1 × 10, pihenő 30 mp + Fekvőtámasz — 1 × 10, pihenő 30 mp + Plank — 1 × 40 mp, pihenő 1 perc]"), c.summary().drop(1).take(1))
+    }
+
+    @Test fun `kilometeres reszidok`() {
+        val s = Splits(1000)
+        assertNull(s.update(999.0, 300_000))
+        assertEquals(305, s.update(1004.0, 305_000))
+        assertNull(s.update(1500.0, 450_000))
+        assertEquals(290, s.update(2001.0, 595_000))
+        assertEquals(listOf(305, 290), s.times)
+        assertEquals(450.0 to 120, s.rest(2450.0, 715_000))
+        assertNull(s.rest(2050.0, 715_000))   // 100 m alatt nem számít
     }
 
     @Test fun `Strava duplikatum felismerese`() {

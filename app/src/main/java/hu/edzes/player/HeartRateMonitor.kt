@@ -2,6 +2,7 @@ package hu.edzes.player
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
@@ -22,38 +23,79 @@ import java.util.UUID
 
 /**
  * Élő pulzus a szabványos Bluetooth LE Heart Rate szolgáltatásból (mellkaspánt, vagy pulzust megosztó óra/karkötő).
- * Megkeresi az első ilyen eszközt, csatlakozik, és szakadás után újrapróbálja. A visszahívás a fő szálon érkezik.
+ *
+ * Két úton keres egyszerre: a telefonhoz már csatlakoztatott / párosított eszközöket egyenként megpróbálja (a Fitbit a
+ * Google Health app kapcsolata miatt ilyenkor sokszor nem hirdeti magát), és közben pulzusszolgáltatást hirdető
+ * eszközöket keres. Az első, amelyiken van pulzusszolgáltatás, nyer. Szakadás után újrakezdi.
+ * Minden visszahívás a fő szálon érkezik.
  */
 @SuppressLint("MissingPermission")
-class HeartRateMonitor(private val ctx: Context, private val onHeartRate: (Int) -> Unit) {
-    private val adapter = ctx.getSystemService(BluetoothManager::class.java)?.adapter
+class HeartRateMonitor(
+    private val ctx: Context,
+    private val onStatus: (String) -> Unit = {},
+    private val onHeartRate: (Int) -> Unit,
+) {
+    private val manager = ctx.getSystemService(BluetoothManager::class.java)
+    private val adapter = manager?.adapter
     private val main = Handler(Looper.getMainLooper())
-    private var gatt: BluetoothGatt? = null
+    private var gatt: BluetoothGatt? = null      // a próbált vagy már adatot küldő kapcsolat
+    private var streaming = false
     private var running = false
+    private var scanning = false
+    private val candidates = ArrayDeque<BluetoothDevice>()
+    private val tried = mutableSetOf<String>()
+
+    private val probeTimeout = Runnable { if (!streaming) { closeGatt(); tryNext() } }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            if (gatt != null) return
-            adapter?.bluetoothLeScanner?.stopScan(this)
-            gatt = result.device.connectGatt(ctx, false, gattCallback, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
+            main.post {
+                if (!running || streaming) return@post
+                val d = result.device
+                if (gatt?.device?.address == d.address) return@post
+                // A hirdetett pulzusszolgáltatású eszköz elsőbbséget kap a próbálgatással szemben.
+                candidates.removeAll { it.address == d.address }
+                candidates.addFirst(d)
+                closeGatt()
+                tryNext()
+            }
         }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) g.discoverServices()
-            else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                g.close()
-                main.post { gatt = null; if (running) main.postDelayed(::scan, 5000) }
+            if (newState == BluetoothProfile.STATE_CONNECTED) { g.discoverServices(); return }
+            if (newState != BluetoothProfile.STATE_DISCONNECTED) return
+            main.post {
+                if (g !== gatt) { g.close(); return@post }
+                val wasStreaming = streaming
+                closeGatt()
+                if (!running) return@post
+                if (wasStreaming) {
+                    onStatus("kapcsolat megszakadt, újrakeresés…")
+                    main.postDelayed({ restart() }, 3000)
+                } else tryNext()
             }
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-            val c = g.getService(SERVICE)?.getCharacteristic(MEASUREMENT) ?: return g.disconnect()
+            val c = g.getService(SERVICE)?.getCharacteristic(MEASUREMENT)
+            if (c == null) {
+                main.post { if (g === gatt) { closeGatt(); tryNext() } else g.close() }
+                return
+            }
             g.setCharacteristicNotification(c, true)
-            val d = c.getDescriptor(CLIENT_CONFIG) ?: return
-            if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-            else @Suppress("DEPRECATION") { d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; g.writeDescriptor(d) }
+            c.getDescriptor(CLIENT_CONFIG)?.let { d ->
+                if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                else @Suppress("DEPRECATION") { d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; g.writeDescriptor(d) }
+            }
+            main.post {
+                if (g !== gatt) return@post
+                streaming = true
+                main.removeCallbacks(probeTimeout)
+                stopScan()
+                onStatus("kapcsolódva: ${name(g.device)}")
+            }
         }
 
         // Android 13+
@@ -66,31 +108,68 @@ class HeartRateMonitor(private val ctx: Context, private val onHeartRate: (Int) 
     }
 
     private fun report(value: ByteArray) {
-        parseHeartRate(value)?.let { bpm -> main.post { if (running) onHeartRate(bpm) } }
+        parseHeartRate(value)?.takeIf { it > 0 }?.let { bpm -> main.post { if (running) onHeartRate(bpm) } }
     }
+
+    private fun name(d: BluetoothDevice) = runCatching { d.name }.getOrNull() ?: d.address
 
     fun start() {
-        if (adapter?.isEnabled != true || !hasPermission(ctx)) return
-        running = true
-        scan()
+        when {
+            !hasPermission(ctx) -> onStatus("nincs Bluetooth-engedély")
+            adapter?.isEnabled != true -> onStatus("a Bluetooth ki van kapcsolva")
+            else -> { running = true; restart() }
+        }
     }
 
-    private fun scan() {
-        if (!running || gatt != null) return
-        runCatching {
+    private fun restart() {
+        if (!running || streaming) return
+        onStatus("pulzusmérő keresése…")
+        tried.clear()
+        candidates.clear()
+        // A telefonhoz már kapcsolódó és a párosított BLE eszközök (fejhallgatót, autót és hasonlókat kihagyva).
+        val connected = runCatching { manager!!.getConnectedDevices(BluetoothProfile.GATT) }.getOrDefault(emptyList())
+        val bonded = runCatching { adapter!!.bondedDevices.toList() }.getOrDefault(emptyList())
+            .filter { it.type == BluetoothDevice.DEVICE_TYPE_LE || it.type == BluetoothDevice.DEVICE_TYPE_DUAL }
+        (connected + bonded).distinctBy { it.address }.forEach { candidates.addLast(it) }
+        startScan()
+        tryNext()
+    }
+
+    private fun tryNext() {
+        if (!running || streaming || gatt != null) return
+        val d = generateSequence { candidates.removeFirstOrNull() }.firstOrNull { tried.add(it.address) } ?: return
+        onStatus("próbálkozás: ${name(d)}")
+        gatt = d.connectGatt(ctx, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        main.postDelayed(probeTimeout, 12_000)
+    }
+
+    private fun closeGatt() {
+        main.removeCallbacks(probeTimeout)
+        gatt?.let { runCatching { it.disconnect() }; it.close() }
+        gatt = null
+        streaming = false
+    }
+
+    private fun startScan() {
+        if (scanning) return
+        scanning = runCatching {
             adapter?.bluetoothLeScanner?.startScan(
                 listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE)).build()),
-                ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER).build(), scanCallback,
+                ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build(), scanCallback,
             )
-        }
+        }.isSuccess
+    }
+
+    private fun stopScan() {
+        if (scanning) runCatching { adapter?.bluetoothLeScanner?.stopScan(scanCallback) }
+        scanning = false
     }
 
     fun stop() {
         running = false
         main.removeCallbacksAndMessages(null)
-        runCatching { adapter?.bluetoothLeScanner?.stopScan(scanCallback) }
-        gatt?.close()
-        gatt = null
+        stopScan()
+        closeGatt()
     }
 
     companion object {

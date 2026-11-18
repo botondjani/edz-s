@@ -101,6 +101,16 @@ fun PlayerScreen(state: PlayerState) {
                     state.heartRate?.toString() ?: "–", Modifier.weight(1f), if (off) MaterialTheme.colorScheme.error else Color.Unspecified,
                 )
             }
+            if (state.heartRate == null && state.hrStatus != null) Text(
+                "Pulzusmérő: ${state.hrStatus}", Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End,
+            )
+            if (state.splits.isNotEmpty()) {
+                val unit = state.splitM / 1000
+                Text(
+                    state.splits.withIndex().toList().takeLast(4).joinToString("   ") { (i, s) -> "${(i + 1) * unit}. km  ${fmtClock(s.toLong())}" },
+                    Modifier.fillMaxWidth().padding(top = 8.dp), style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center,
+                )
+            }
             if (cardio && !state.gps) Text(
                 "Nincs GPS (engedély vagy helymeghatározás kikapcsolva): táv és tempó nem mérhető.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,

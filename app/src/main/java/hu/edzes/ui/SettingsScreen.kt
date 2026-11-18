@@ -20,6 +20,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +39,7 @@ import hu.edzes.dao
 import hu.edzes.data.Backup
 import hu.edzes.data.Templates
 import androidx.health.connect.client.HealthConnectClient
+import hu.edzes.player.HeartRateMonitor
 import hu.edzes.prefs
 import hu.edzes.sync.Hc
 import hu.edzes.sync.Strava
@@ -123,11 +125,14 @@ fun SettingsScreen() {
         )
         PrefSwitch("voice", true, "Hangbemondás (magyar szövegfelolvasó)")
         PrefSwitch("live_hr", true, "Élő pulzus Bluetooth-on")
+        PrefSwitch("hr_every", false, "Pulzus bemondása 2,5 percenként")
         Text(
-            "Az élő pulzushoz az órának/karkötőnek sugároznia kell a pulzust. Fitbit Airnél: Google Health app → eszköz beállításai → " +
-                "pulzus megosztása (Share heart rate) → mindig látható. Mellkaspánttal is működik.",
+            "Az élő pulzushoz az órának/karkötőnek sugároznia kell a pulzust. Fitbit Air: Google Health app → bal felül Kapcsolatok → " +
+                "az eszközöd → Pulzus megosztása (Share heart rate) → Kezdés (Get started), és ha kéri, „Mindig látható”. " +
+                "Fitbit Edge / Charge 6: az órán lehúzva → Broadcast HR. Mellkaspánttal is működik.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
         )
+        HeartRateTest()
 
         Section("Adatok")
         var restoring by remember { mutableStateOf<Backup?>(null) }
@@ -170,5 +175,31 @@ private fun PrefSwitch(key: String, default: Boolean, label: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Switch(on, { on = it; prefs.edit { putBoolean(key, it) } })
+    }
+}
+
+/** Pulzusmérő próba edzés nélkül: látszik, megtalálja-e az app az eszközt, és jön-e adat. */
+@Composable
+private fun HeartRateTest() {
+    val ctx = LocalContext.current
+    var testing by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+    var bpm by remember { mutableStateOf<Int?>(null) }
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { testing = true }
+    if (testing) DisposableEffect(Unit) {
+        val monitor = HeartRateMonitor(ctx, onStatus = { status = it }) { bpm = it }
+        monitor.start()
+        onDispose { monitor.stop() }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FilledTonalButton(onClick = {
+            if (testing) { testing = false; bpm = null; status = "" }
+            else if (HeartRateMonitor.hasPermission(ctx)) testing = true
+            else permissions.launch(HeartRateMonitor.PERMISSIONS.toTypedArray())
+        }) { Text(if (testing) "Próba leállítása" else "Pulzusmérő próba") }
+        if (testing) Text(
+            "  " + (bpm?.let { "♥ $it" } ?: "") + "  " + status,
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
 }

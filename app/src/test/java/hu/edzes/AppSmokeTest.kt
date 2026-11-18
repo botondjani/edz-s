@@ -105,6 +105,8 @@ class AppSmokeTest {
         shot("futas-piheno")
         move(91)
         rule.onNodeWithText("2/6. kör").assertIsDisplayed()
+        rule.onNodeWithText("1. km  1:", substring = true).assertIsDisplayed()   // kilométeres részidő a képernyőn
+        shot("futas-reszidok")
         move(20)
         rule.onNodeWithText("Befejezés").performClick()
         rule.onNodeWithText("Mentés").performClick()
@@ -117,7 +119,7 @@ class AppSmokeTest {
         assertEquals("6 × 400 m / 90 mp", run.title)
         assertTrue("táv: ${run.distanceM}", run.distanceM!! in 1600.0..1750.0)   // ~151 mp × 11,1 m
         val laps = runBlocking { describe(dao.setLogs(run.id)) }
-        assertTrue(laps, Regex("Gyors: 4\\d\\d m 0:3\\d").matches(laps))
+        assertTrue(laps, Regex("Gyors: 4\\d\\d m 0:3\\d\nKilométer: 1 km 1:\\d\\d, 6\\d\\d m 1:\\d\\d").matches(laps))
         assertTrue(Tracks.read(app, run.id).size > 140)
     }
 

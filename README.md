@@ -9,9 +9,11 @@ Személyes, offline-first Android edzésapp. Nincs saját szerver: minden adat a
 - **Edzés indítása** (Ma fül): Futás / Kerékpár / Séta élő idővel, távval, tempóval és pulzussal, GPS-szel rögzítve;
   Súlyzós edzés sorozatnaplóval és pihenő-visszaszámlálóval; Intervall-szerkesztő (bemelegítés, N × munka idő vagy táv
   szerint + pihenő, levezetés), sablonként menthető. Magyar hangbemondás, zárolt képernyő mellett is; kilométerenként
-  átlagtempó, intervallnál részidők.
+  a km ideje, átlagtempó és pulzus (képernyőn is), intervallnál részidők; kérésre 2,5 percenként pulzusbemondás.
+  Köredzés: a tervezett edzés „▶ Körökben” gombjával a gyakorlatok körönként váltakoznak.
 - **Élő pulzus**: Bluetooth LE pulzusszolgáltatásból (mellkaspánt, vagy pulzust megosztó karkötő). Fitbit Airnél a
-  Google Health appban kell bekapcsolni a pulzus megosztását („Share heart rate”, mindig látható).
+  Google Health appban: Kapcsolatok → eszköz → Share heart rate → Get started. Beállítások → „Pulzusmérő próba”
+  edzés nélkül megmutatja, megtalálja-e az app.
 - **Health Connect**: az órával (Fitbit / Google Health) mért edzések, pulzus, táv, útvonal átvétele; automatikus
   párosítás a napi tervvel. Ha ugyanazt az edzést az app is mérte, a kettőt összevonja. Az úszást csak az óra méri.
 - **Strava**: kétirányú szinkron duplikáció-szűréssel. A konditermi edzés leírásába a gyakorlatok és súlyok is felkerülnek.
