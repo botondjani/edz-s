@@ -200,8 +200,9 @@ class AppSmokeTest {
         rule.onNodeWithText("Fekvenyomás: 8×60 kg, 8×60 kg\nPlank: 30 mp").assertIsDisplayed()
         rule.onNodeWithText("Bezárás").performScrollTo().performClick()
         rule.onNodeWithText("6 × 400 m / 90 mp").performClick()
-        rule.onNodeWithText("Útvonal").assertIsDisplayed()
-        rule.onNodeWithText("Részidők").assertIsDisplayed()
+        // A részletek (napló, útvonal) háttérszálon töltődnek be: megvárjuk őket.
+        await { runCatching { rule.onNodeWithText("Részidők").performScrollTo().assertIsDisplayed() }.isSuccess }
+        rule.onNodeWithText("Útvonal").performScrollTo().assertIsDisplayed()
         shot("edzes-reszletek")
         rule.onNodeWithText("Bezárás").performScrollTo().performClick()
         rule.onNodeWithText("Statisztika").performClick()
