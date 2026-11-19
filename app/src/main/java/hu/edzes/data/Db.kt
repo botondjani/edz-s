@@ -71,6 +71,7 @@ data class SetLog(
     val weightKg: Double? = null,
     val durationS: Int? = null,
     val distanceM: Double? = null,     // kardió részidőknél a szakaszon megtett táv
+    val strava: String? = null,        // a terv által megadott Strava gyakorlatazonosító
 )
 
 @Serializable
@@ -103,6 +104,7 @@ interface EdzesDao {
     @Query("SELECT * FROM Activity ORDER BY startMs DESC") fun activities(): Flow<List<Activity>>
     @Query("SELECT * FROM Activity WHERE startMs >= :sinceMs ORDER BY startMs") suspend fun activitiesSince(sinceMs: Long): List<Activity>
     @Query("SELECT * FROM Activity WHERE id = :id") suspend fun activity(id: Long): Activity?
+    @Query("SELECT * FROM Activity WHERE stravaId = :stravaId LIMIT 1") suspend fun byStravaId(stravaId: Long): Activity?
     @Insert suspend fun insert(a: Activity): Long
     @Update suspend fun update(a: Activity)
     @Query("DELETE FROM Activity WHERE id = :id") suspend fun deleteActivityRow(id: Long)
@@ -135,7 +137,7 @@ interface EdzesDao {
     }
 }
 
-@Database(entities = [Program::class, Planned::class, Activity::class, SetLog::class], version = 3, exportSchema = false)
+@Database(entities = [Program::class, Planned::class, Activity::class, SetLog::class], version = 4, exportSchema = false)
 abstract class EdzesDb : RoomDatabase() {
     abstract fun dao(): EdzesDao
 
@@ -146,6 +148,9 @@ abstract class EdzesDb : RoomDatabase() {
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) = db.execSQL("ALTER TABLE Activity ADD COLUMN hrHist TEXT")
         }
-        val MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) = db.execSQL("ALTER TABLE SetLog ADD COLUMN strava TEXT")
+        }
+        val MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
     }
 }

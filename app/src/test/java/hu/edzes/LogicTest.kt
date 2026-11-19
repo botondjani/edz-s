@@ -5,6 +5,9 @@ import hu.edzes.data.SetLog
 import hu.edzes.model.CLAUDE_PROMPT
 import hu.edzes.model.ProgramParser
 import hu.edzes.model.dates
+import hu.edzes.model.StravaExercises
+import hu.edzes.sync.buildStrengthJson
+import hu.edzes.sync.remoteDuplicates
 import hu.edzes.model.Block
 import hu.edzes.model.Splits
 import hu.edzes.model.Workout
@@ -329,6 +332,57 @@ class LogicTest {
         assertEquals(listOf(305, 290), s.times)
         assertEquals(450.0 to 120, s.rest(2450.0, 715_000))
         assertNull(s.rest(2050.0, 715_000))   // 100 m alatt nem számít
+    }
+
+    @Test fun `gyakorlatnevek Strava-azonositora`() {
+        val cases = mapOf(
+            "Fekvenyomás" to "BARBELL_BENCH_PRESS", "Ferde kézi fekvenyomás" to "INCLINE_DUMBBELL_BENCH_PRESS",
+            "Guggolás" to "BARBELL_BACK_SQUAT", "Serleg guggolás" to "GOBLET_SQUAT", "Bolgár guggolás" to "DUMBBELL_BULGARIAN_SPLIT_SQUATS",
+            "Román felhúzás" to "ROMANIAN_DEADLIFTS", "Felhúzás" to "BARBELL_DEADLIFT", "Húzódzkodás" to "PULL_UP_GENERIC",
+            "Lehúzás csigán" to "LAT_PULLDOWN", "Döntött törzsű evezés" to "BENT_OVER_BARBELL_ROW", "Kézi evezés" to "DUMBBELL_ROW",
+            "Fekvőtámasz" to "PUSH_UP_GENERIC", "Vállnyomás" to "OVERHEAD_BARBELL_PRESS", "Oldalemelés" to "LATERAL_RAISE_GENERIC",
+            "Bicepsz" to "STANDING_DUMBBELL_BICEPS_CURL", "Lábhajlítás gépen" to "LEG_CURL_GENERIC", "Tricepsz letolás" to "TRICEPS_PRESSDOWN",
+            "Plank" to "PLANK_GENERIC", "Oldalsó plank" to "SIDE_PLANK", "Burpee" to "BURPEE", "Kitörés" to "LUNGE_GENERIC",
+            "Csípőemelés" to "HIP_THRUST", "Hasprés" to "CRUNCH", "Bench press" to "BARBELL_BENCH_PRESS", "Ismeretlen mozdulat" to "TOTAL_BODY_GENERIC",
+            "barbell_back_squat" to "BARBELL_BACK_SQUAT",
+        )
+        for ((name, id) in cases) assertEquals(name, id, StravaExercises.of(name))
+        assertTrue(cases.values.all { it in StravaExercises.ALL })
+        assertEquals("ARNOLD_PRESS", StravaExercises.of("Vállnyomás", "arnold_press"))
+        assertEquals("OVERHEAD_BARBELL_PRESS", StravaExercises.of("Vállnyomás", "NINCS_ILYEN"))
+        // a tervben megadott azonosítót ellenőrzi az import
+        fun parse(id: String) = ProgramParser.parse(
+            """{"format":"edzes-program/v1","name":"A","days":[{"week":1,"weekday":"MON","workout":{"title":"T","sport":"strength",
+               "blocks":[{"type":"sets","exercise":"Guggolás","sets":3,"reps":5,"strava_exercise":"$id"}]}}]}"""
+        )
+        assertEquals("BARBELL_FRONT_SQUAT", parse("barbell_front_squat").program!!.days[0].workout.blocks[0].strava)
+        assertTrue("ismeretlen Strava gyakorlat" in parse("BACK_SQUATZ").errors.single())
+    }
+
+    @Test fun `Strava erőedzés JSON`() {
+        val start = java.time.Instant.parse("2026-11-19T07:00:00Z").toEpochMilli()
+        val logs = listOf(
+            SetLog(activityId = 1, exercise = "Fekvenyomás", reps = 8, weightKg = 60.0),
+            SetLog(activityId = 1, exercise = "Húzódzkodás", reps = 10),
+            SetLog(activityId = 1, exercise = "Plank", durationS = 45, strava = "SIDE_PLANK"),
+            SetLog(activityId = 1, exercise = "Guggolás", reps = 0),                        // kihagyott sorozat
+            SetLog(activityId = 1, exercise = "Kilométer", durationS = 300, distanceM = 1000.0), // részidő, nem sorozat
+        )
+        val hr = listOf(TrackPoint(start - 5000, hr = 90), TrackPoint(start + 5000, hr = 120), TrackPoint(start + 5500, hr = 121), TrackPoint(start + 10_000, hr = 130))
+        val json = buildStrengthJson(start, 3600, 300, logs, hr, java.time.ZoneId.of("Europe/Budapest")).toString()
+        assertEquals(
+            """{"version":"1.0","start_time":"2026-11-19T07:00:00Z","utc_offset":3600,"elapsed_time":3600,"total_calories":300,""" +
+                """"creator":{"name":"Edzés app"},"streams":{"time":[5,10],"heartrate":[120,130]},"sets":[""" +
+                """{"exercise_type":"BARBELL_BENCH_PRESS","repetitions":8,"weight":60.0},{"exercise_type":"PULL_UP_GENERIC","repetitions":10},""" +
+                """{"exercise_type":"SIDE_PLANK","duration":45}]}""",
+            json,
+        )
+        assertEquals("HighIntensityIntervalTraining", hu.edzes.model.stravaType("hiit"))
+    }
+
+    @Test fun `dupla edzes felismerese a Stravaban`() {
+        val dupes = remoteDuplicates(listOf(remote(1, 0, 60), remote(2, 100, 30), remote(3, 5, 50), remote(4, 200, 10)))
+        assertEquals(listOf(3L), dupes.map { it.id })
     }
 
     @Test fun `Strava duplikatum felismerese`() {

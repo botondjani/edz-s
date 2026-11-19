@@ -97,7 +97,7 @@ object Player {
 
     /** Súlyzós sorozat kész: naplózás, majd továbblépés. */
     fun completeSet(reps: Int?, weightKg: Double?) = service?.apply {
-        engine.current?.exercise?.let { log += SetLog(activityId = 0, exercise = it, reps = reps ?: 0, weightKg = weightKg) }
+        engine.current?.let { s -> s.exercise?.let { log += SetLog(activityId = 0, exercise = it, reps = reps ?: 0, weightKg = weightKg, strava = s.strava) } }
         handle(engine.next())
     }
 
@@ -259,7 +259,7 @@ class PlayerService : Service() {
                     log += SetLog(activityId = 0, exercise = e.step.title, durationS = (e.ms / 1000).toInt(), distanceM = e.distM.takeIf { gps })
                 // Időre végzett gyakorlat (pl. plank) naplózása, ha végigment.
                 e.completed && e.step.exercise != null && e.step.durationS != null ->
-                    log += SetLog(activityId = 0, exercise = e.step.exercise, durationS = e.step.durationS)
+                    log += SetLog(activityId = 0, exercise = e.step.exercise, durationS = e.step.durationS, strava = e.step.strava)
             }
             is Engine.Event.Countdown -> signal(long = false)
             Engine.Event.End -> { signal(long = true); say("Edzés vége") }

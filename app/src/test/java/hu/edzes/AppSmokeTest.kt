@@ -197,7 +197,7 @@ class AppSmokeTest {
         await { runCatching { rule.onNodeWithText("Felsőtest A").assertIsDisplayed() }.isSuccess }
         shot("elozmenyek")
         rule.onNodeWithText("Felsőtest A").performClick()
-        rule.onNodeWithText("Fekvenyomás: 8×60 kg, 8×60 kg\nPlank: 30 mp").assertIsDisplayed()
+        await { runCatching { rule.onNodeWithText("Fekvenyomás: 8×60 kg, 8×60 kg\nPlank: 30 mp").assertIsDisplayed() }.isSuccess }
         rule.onNodeWithText("Bezárás").performScrollTo().performClick()
         await { rule.onAllNodesWithText("Bezárás").fetchSemanticsNodes().isEmpty() }   // az előző ablak bezárult
         rule.onNodeWithText("6 × 400 m / 90 mp").performClick()

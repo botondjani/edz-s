@@ -16,7 +16,9 @@ Személyes, offline-first Android edzésapp. Nincs saját szerver: minden adat a
   edzés nélkül megmutatja, megtalálja-e az app.
 - **Health Connect**: az órával (Fitbit / Google Health) mért edzések, pulzus, táv, útvonal átvétele; automatikus
   párosítás a napi tervvel. Ha ugyanazt az edzést az app is mérte, a kettőt összevonja. Az úszást csak az óra méri.
-- **Strava**: kétirányú szinkron duplikáció-szűréssel. A konditermi edzés leírásába a gyakorlatok és súlyok is felkerülnek.
+- **Strava**: kétirányú szinkron duplikáció-szűréssel (feltöltés előtt mindig ellenőrzi, nincs-e már időben átfedő edzés
+  a Stravában; ha a Stravában dupla edzést lát, figyelmeztet). A súlyzós edzés a Strava erőedzés-nézetébe kerül:
+  gyakorlatok, sorozatok, ismétlés, súly és izomtérkép (a magyar gyakorlatnévből, vagy a terv `strava_exercise` mezőjéből).
 - **Pulzuszónák**: a Beállításokban megadott max pulzusból; edzés közben látszik az aktuális zóna, és ha a szakasznak
   célzónája van (pl. `"target": "Z2"`), az app szól, ha tartósan kilépsz belőle.
 - **Edzés részletei**: útvonal, tempó- és pulzusgörbe, zónaidők, részidők / sorozatok.

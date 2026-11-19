@@ -62,11 +62,12 @@ class Strava(ctx: Context) {
         remove("strava_access"); remove("strava_refresh"); remove("strava_expires"); remove("strava_connected_at")
     }
 
-    suspend fun activities(afterS: Long): List<StravaActivity> {
+    suspend fun activities(afterS: Long, beforeS: Long? = null): List<StravaActivity> {
         val out = mutableListOf<StravaActivity>()
         var page = 1
         do {
-            val items = call(get("athlete/activities?after=$afterS&per_page=100&page=${page++}")).jsonArray
+            val range = "after=$afterS" + (beforeS?.let { "&before=$it" } ?: "")
+            val items = call(get("athlete/activities?$range&per_page=100&page=${page++}")).jsonArray
             out += items.map { parseActivity(it.jsonObject) }
         } while (items.size == 100)
         return out
@@ -82,12 +83,13 @@ class Strava(ctx: Context) {
         return call(post("activities", form.build())).jsonObject.long("id")!!
     }
 
-    /** Feltölti a TCX-et, megvárja a feldolgozást, majd beállítja a nevet, sportot és leírást. */
-    suspend fun uploadTcx(tcx: String, a: Activity, description: String): Long {
+    /** Feltölti a fájlt (tcx vagy json), megvárja a feldolgozást, majd beállítja a nevet, sportot és leírást. */
+    suspend fun uploadFile(data: String, dataType: String, a: Activity, description: String): Long {
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("data_type", "tcx").addFormDataPart("name", a.title)
-            .addFormDataPart("external_id", "edzes-${a.id}-${a.startMs}")
-            .addFormDataPart("file", "edzes.tcx", tcx.toRequestBody("application/xml".toMediaType()))
+            .addFormDataPart("data_type", dataType).addFormDataPart("name", a.title)
+            .addFormDataPart("sport_type", stravaType(a.sport))
+            .addFormDataPart("external_id", "edzes-${a.id}-${a.startMs}.$dataType")
+            .addFormDataPart("file", "edzes.$dataType", data.toRequestBody("application/$dataType".toMediaType()))
             .build()
         val id = try {
             var status = call(post("uploads", body)).jsonObject

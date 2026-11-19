@@ -22,6 +22,7 @@ data class Block(
     val distanceM: Int? = null,
     val target: String? = null,
     val blocks: List<Block> = emptyList(),
+    val strava: String? = null,   // Strava gyakorlatazonosító (pl. BARBELL_BENCH_PRESS), ha a terv megadja
 )
 
 @Serializable
@@ -31,6 +32,7 @@ data class Workout(
     val notes: String? = null,
     val target: String? = null,
     val blocks: List<Block> = emptyList(),
+    val strava: String? = null,   // Strava gyakorlatazonosító (pl. BARBELL_BENCH_PRESS), ha a terv megadja
 )
 
 data class DaySpec(val week: Int, val weekday: Int, val workout: Workout)
@@ -142,6 +144,10 @@ object ProgramParser {
             return if (out.any { it == null }) null else out.filterNotNull()
         }
 
+        private fun stravaId(o: JsonObject, path: String): String? = str(o, path, "strava_exercise", required = false)?.uppercase()?.also {
+            if (it !in StravaExercises.ALL) errors += "$path.strava_exercise: ismeretlen Strava gyakorlat: \"$it\""
+        }
+
         private fun block(o: JsonObject?, path: String): Block? {
             if (o == null) { errors += "$path: objektum kell"; return null }
             val before = errors.size
@@ -149,11 +155,12 @@ object ProgramParser {
                 "sets" -> Block(
                     "sets", str(o, path, "exercise").orEmpty(), int(o, path, "sets", min = 1) ?: 1,
                     reps = str(o, path, "reps"), weightKg = num(o, path, "weight_kg", required = false),
-                    restS = int(o, path, "rest_s", required = false) ?: 0,
+                    restS = int(o, path, "rest_s", required = false) ?: 0, strava = stravaId(o, path),
                 )
                 "timed" -> Block(
                     "timed", str(o, path, "exercise").orEmpty(), int(o, path, "sets", required = false, min = 1) ?: 1,
                     durationS = int(o, path, "duration_s", min = 1), restS = int(o, path, "rest_s", required = false) ?: 0,
+                    strava = stravaId(o, path),
                 )
                 "interval" -> {
                     val dur = int(o, path, "work_s", required = false, min = 1)
@@ -225,6 +232,7 @@ data class Step(
     val exercise: String? = null,   // naplózandó gyakorlat
     val reps: String? = null,
     val weightKg: Double? = null,
+    val strava: String? = null,
 ) {
     val manual get() = durationS == null && distanceM == null
 }
@@ -240,10 +248,10 @@ fun flatten(blocks: List<Block>, prefix: String = ""): List<Step> = blocks.flatM
     when (b.type) {
         "sets" -> (1..b.sets).flatMap { i ->
             val plan = b.reps + " ism." + (b.weightKg?.let { " × ${fmtKg(it)}" } ?: "")
-            listOfNotNull(Step(b.name, info(prefix, i, b.sets, plan), exercise = b.name, reps = b.reps, weightKg = b.weightKg), rest)
+            listOfNotNull(Step(b.name, info(prefix, i, b.sets, plan), exercise = b.name, reps = b.reps, weightKg = b.weightKg, strava = b.strava), rest)
         }
         "timed" -> (1..b.sets).flatMap { i ->
-            listOfNotNull(Step(b.name, info(prefix, i, b.sets, null), durationS = b.durationS, exercise = b.name), rest)
+            listOfNotNull(Step(b.name, info(prefix, i, b.sets, null), durationS = b.durationS, exercise = b.name, strava = b.strava), rest)
         }
         "interval" -> (1..b.sets).flatMap { i ->
             listOfNotNull(Step(b.name, "$prefix$i/${b.sets}. kör" + (b.target?.let { " · $it" } ?: ""), durationS = b.durationS, distanceM = b.distanceM), rest)
@@ -333,6 +341,7 @@ Szabályok:
 - weekday: MON | TUE | WED | THU | FRI | SAT | SUN; week: 1-től számozva. Minden hét minden edzését írd ki külön (a progresszióval együtt).
 - Blokktípusok: sets (exercise, sets, reps, opcionális weight_kg és rest_s), timed (exercise, duration_s, opcionális sets és rest_s), interval (name, work_s VAGY work_m, rest_s, rounds, opcionális target), segment (name, és duration_s VAGY distance_m, opcionális target), repeat (times, blocks, opcionális rest_s = pihenő a körök között).
 - Köredzés (A, B, C, majd újra A, B, C): repeat blokk, times = a körök száma, benne minden gyakorlat "sets": 1. A sets blokk "sets" > 1 értéke azt jelenti, hogy az összes sorozat egymás után megy, mielőtt a következő gyakorlat jön.
+- A sets és timed blokkba opcionálisan "strava_exercise" is írható: a Strava gyakorlatazonosítója (pl. BARBELL_BENCH_PRESS, PULL_UP_GENERIC, PLANK_GENERIC), így a Stravában pontos izomtérkép lesz. Ha nem vagy biztos benne, hagyd el, az app a névből kitalálja.
 - A reps lehet szám vagy szöveg (pl. "8-10", "max"). Idő másodpercben, táv méterben, súly kg-ban.
 - Blokkok nélküli kardió edzésnél a target adja a célt: duration_min, distance_km, hr_zone, pace, note.
 

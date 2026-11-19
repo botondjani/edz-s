@@ -81,6 +81,10 @@ Mindig **egyetlen JSON kódblokkot** adj, benne semmi komment. A JSON előtt/ut�
 - **Köredzés** (A, B, C, majd újra A, B, C): `repeat` blokk, `times` = körök száma, benne minden gyakorlat `"sets": 1`,
   a gyakorlatok közti pihenő a gyakorlat `rest_s`-e, a körök közti a `repeat` `rest_s`-e. Egy `sets` blokk `"sets": 3`
   értéke azt jelenti, hogy a gyakorlat mindhárom sorozata egymás után megy, és csak utána jön a következő gyakorlat.
+- `sets` és `timed` blokkba opcionálisan `strava_exercise` írható: a Strava gyakorlatazonosítója (pl. `BARBELL_BENCH_PRESS`,
+  `BARBELL_BACK_SQUAT`, `PULL_UP_GENERIC`, `PUSH_UP_GENERIC`, `ROMANIAN_DEADLIFTS`, `PLANK_GENERIC`), így a Stravában pontos
+  lesz az izomtérkép. Csak a Strava hivatalos listájából (developers.strava.com/docs/uploads) használj azonosítót; ha nem
+  vagy biztos, hagyd el, az app a gyakorlat nevéből választ.
 - Idő másodpercben, táv méterben, súly kilogrammban; számokat ne tegyél idézőjelek közé (kivéve `reps` szövegként).
 - `target`: szöveg (pl. `"Z4, 4:30/km"`). Ha **`Z1`–`Z5`** szerepel benne, az app élő pulzusnál ebből ad zónafigyelmeztetést.
   Blokkok nélküli kardióedzésnél a `target` objektum is lehet: `duration_min`, `distance_km`, `hr_zone`, `pace`, `note`.

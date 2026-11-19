@@ -15,7 +15,7 @@ fun sportGroup(sport: String) = if (isCardio(sport)) sport else "gym"
 
 fun stravaType(sport: String) = when (sport) {
     "run" -> "Run"; "bike" -> "Ride"; "swim" -> "Swim"; "strength" -> "WeightTraining"
-    "hiit" -> "HIIT"; "walk" -> "Walk"; else -> "Workout"
+    "hiit" -> "HighIntensityIntervalTraining"; "walk" -> "Walk"; else -> "Workout"
 }
 
 fun sportOfStrava(type: String) = when {
@@ -23,7 +23,7 @@ fun sportOfStrava(type: String) = when {
     type.endsWith("Ride") -> "bike"
     type == "Swim" -> "swim"
     type == "WeightTraining" -> "strength"
-    type == "HIIT" || type == "Crossfit" -> "hiit"
+    type == "HighIntensityIntervalTraining" || type == "HIIT" || type == "Crossfit" -> "hiit"
     type == "Walk" || type == "Hike" -> "walk"
     else -> "other"
 }

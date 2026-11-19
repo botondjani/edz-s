@@ -12,7 +12,9 @@ import hu.edzes.data.EdzesDao
 import hu.edzes.data.SKIPPED
 import hu.edzes.data.SetLog
 import hu.edzes.data.Tracks
+import hu.edzes.model.dayOfMs
 import hu.edzes.model.describe
+import hu.edzes.model.isCardio
 import hu.edzes.model.hrHistogram
 import hu.edzes.model.sportGroup
 import hu.edzes.model.sportName
@@ -20,6 +22,7 @@ import hu.edzes.prefs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.time.Instant
 import java.time.LocalTime
@@ -28,6 +31,12 @@ import java.time.temporal.ChronoUnit
 
 fun overlaps(aStartMs: Long, aDurS: Int, bStartMs: Long, bDurS: Int): Boolean =
     aStartMs < bStartMs + maxOf(bDurS, 60) * 1000L && bStartMs < aStartMs + maxOf(aDurS, 60) * 1000L
+
+/** A Stravában időben átfedő edzéspárok második tagjai (pl. ha a Google Health is feltölti ugyanazt). */
+fun remoteDuplicates(remote: List<StravaActivity>): List<StravaActivity> {
+    val sorted = remote.sortedBy { it.startMs }
+    return sorted.filterIndexed { i, r -> sorted.take(i).any { overlaps(it.startMs, it.durationS, r.startMs, r.durationS) } }
+}
 
 class StravaPlan(val links: List<Pair<Activity, Long>>, val uploads: List<Activity>, val imports: List<StravaActivity>)
 
@@ -57,6 +66,7 @@ object Sync {
     val status = MutableStateFlow("")
     val running = MutableStateFlow(false)
     private val mutex = Mutex()
+    private val uploadMutex = Mutex()
     private const val WINDOW_DAYS = 30L
     private const val DAY_MS = 86_400_000L
 
@@ -133,8 +143,10 @@ object Sync {
         if (!strava.connected) return null
         val dao = ctx.dao
         val sinceMs = System.currentTimeMillis() - WINDOW_DAYS * DAY_MS
-        val plan = planStrava(dao.activitiesSince(sinceMs - DAY_MS), strava.activities(sinceMs / 1000))
+        val remote = strava.activities(sinceMs / 1000)
+        val plan = planStrava(dao.activitiesSince(sinceMs - DAY_MS), remote)
         plan.links.forEach { (a, id) -> dao.update(a.copy(stravaId = id)) }
+        val dupes = remoteDuplicates(remote)
         for (r in plan.imports) {
             val a = Activity(
                 source = "strava", sport = r.sport, title = r.name, startMs = r.startMs, durationS = r.durationS,
@@ -149,7 +161,8 @@ object Sync {
                 (a.sport == "walk" && !ctx.prefs.getBoolean("upload_walks", false))
             if (!skip && upload(ctx, a)) uploaded++
         }
-        return "Strava: ${plan.imports.size} letöltve, $uploaded feltöltve"
+        return "Strava: ${plan.imports.size} letöltve, $uploaded feltöltve" +
+            dupes.joinToString("") { " · FIGYELEM: dupla edzés a Stravában: ${it.name} (${dayOfMs(it.startMs)})" }
     }
 
     /**
@@ -159,10 +172,18 @@ object Sync {
      */
     suspend fun upload(
         ctx: Context, activity: Activity, route: ExerciseRoute? = null, routeDenied: Boolean = false, force: Boolean = false,
-    ): Boolean {
+    ): Boolean = uploadMutex.withLock {
         val dao = ctx.dao
-        var a = activity
+        // Mindig a friss állapotból indulunk: ha közben (pl. egy párhuzamos szinkron) feltöltötte, nem tesszük fel újra.
+        var a = dao.activity(activity.id)?.copy(stravaError = activity.stravaError) ?: return false
+        if (a.stravaId != null) return true
         try {
+            // Biztonsági háló: ha a Stravában már van időben átfedő edzés (pl. egy korábbi, félbeszakadt feltöltésből),
+            // ahhoz kapcsoljuk, és nem töltünk fel újat.
+            val startS = a.startMs / 1000
+            Strava(ctx).activities(startS - 86_400, startS + a.durationS + 86_400)
+                .firstOrNull { overlaps(a.startMs, a.durationS, it.startMs, it.durationS) && dao.byStravaId(it.id) == null }
+                ?.let { dao.update(a.copy(stravaId = it.id, stravaError = null, needsRoute = false)); return true }
             val hcOk = Hc.available(ctx) && runCatching { Hc(ctx).granted() }.getOrDefault(false)
             val points = try {
                 trackPoints(ctx, a, route, routeDenied, hcOk)
@@ -180,10 +201,20 @@ object Sync {
             val endMs = a.startMs + a.durationS * 1000L
             if (!force && a.source == "app" && hcOk && points.none { it.hr != null } && System.currentTimeMillis() - endMs < 30 * 60_000) return false
             a = a.copy(needsRoute = false)
-            val description = describe(dao.setLogs(a.id))
+            val logs = dao.setLogs(a.id)
+            val description = describe(logs)
             val strava = Strava(ctx)
-            val id = if (points.isEmpty()) strava.createManual(a, description)
-            else strava.uploadTcx(buildTcx(a.sport, a.startMs, a.durationS, a.distanceM, a.calories, points), a, description)
+            val id = when {
+                // Súlyzós / HIIT sorozatokkal: a Strava saját erőedzés-nézetébe (sorozatok, izomtérkép).
+                !isCardio(a.sport) && strengthSets(logs).isNotEmpty() -> try {
+                    strava.uploadFile(buildStrengthJson(a.startMs, a.durationS, a.calories, logs, points).toString(), "json", a, description)
+                } catch (e: StravaException) {
+                    if (Strava.duplicateId(e.message.orEmpty()) != null) throw e
+                    strava.createManual(a, description)   // ha a sorozatos formátumot elutasítja, legalább az edzés felkerül
+                }
+                points.isEmpty() -> strava.createManual(a, description)
+                else -> strava.uploadFile(buildTcx(a.sport, a.startMs, a.durationS, a.distanceM, a.calories, points), "tcx", a, description)
+            }
             dao.update(a.copy(stravaId = id, stravaError = null))
             return true
         } catch (e: StravaException) {
