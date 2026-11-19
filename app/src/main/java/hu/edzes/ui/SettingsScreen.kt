@@ -1,5 +1,7 @@
 package hu.edzes.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +23,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -31,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import androidx.health.connect.client.PermissionController
@@ -178,16 +183,30 @@ private fun PrefSwitch(key: String, default: Boolean, label: String) {
     }
 }
 
-/** Pulzusmérő próba edzés nélkül: látszik, megtalálja-e az app az eszközt, és jön-e adat. */
+/** Pulzusmérő próba edzés nélkül: látszik, megtalálja-e az app az eszközt, és részletes napló készül a hibakereséshez. */
 @Composable
 private fun HeartRateTest() {
     val ctx = LocalContext.current
     var testing by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
     var bpm by remember { mutableStateOf<Int?>(null) }
-    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { testing = true }
+    val log = remember { mutableStateListOf<String>() }
+    val started = remember { mutableLongStateOf(0L) }
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (HeartRateMonitor.hasPermission(ctx)) testing = true else ctx.toast("Bluetooth-engedély nélkül nem megy")
+    }
     if (testing) DisposableEffect(Unit) {
-        val monitor = HeartRateMonitor(ctx, onStatus = { status = it }) { bpm = it }
+        log.clear()
+        started.longValue = System.currentTimeMillis()
+        fun add(line: String) {
+            log += "%5.1f s  %s".format((System.currentTimeMillis() - started.longValue) / 1000.0, line)
+            if (log.size > 200) log.removeAt(0)
+        }
+        add("Android ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+        val monitor = HeartRateMonitor(ctx, onStatus = { status = it; add("állapot: $it") }, onLog = ::add) { b ->
+            if (bpm == null) add("első pulzusérték: $b")
+            bpm = b
+        }
         monitor.start()
         onDispose { monitor.stop() }
     }
@@ -197,9 +216,18 @@ private fun HeartRateTest() {
             else if (HeartRateMonitor.hasPermission(ctx)) testing = true
             else permissions.launch(HeartRateMonitor.PERMISSIONS.toTypedArray())
         }) { Text(if (testing) "Próba leállítása" else "Pulzusmérő próba") }
-        if (testing) Text(
-            "  " + (bpm?.let { "♥ $it" } ?: "") + "  " + status,
-            style = MaterialTheme.typography.bodyMedium,
+        if (testing) Text("  " + (bpm?.let { "♥ $it  " } ?: "") + status, style = MaterialTheme.typography.bodyMedium)
+    }
+    if (log.isNotEmpty()) {
+        Text(
+            "Ha nem talál pulzust, hagyd futni kb. 1 percig (közben a Google Health appban indítsd el a pulzusmegosztást), " +
+                "majd másold ki a naplót, és küldd el.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
         )
+        TextButton(onClick = {
+            ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Pulzusmérő napló", log.joinToString("\n")))
+            ctx.toast("Napló a vágólapon")
+        }) { Text("Napló másolása") }
+        Text(log.takeLast(25).joinToString("\n"), style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
     }
 }

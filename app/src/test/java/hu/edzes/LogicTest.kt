@@ -201,6 +201,10 @@ class LogicTest {
         assertEquals(142, HeartRateMonitor.parseHeartRate(byteArrayOf(0x00, 142.toByte())))
         assertEquals(300, HeartRateMonitor.parseHeartRate(byteArrayOf(0x01, 0x2C, 0x01)))
         assertNull(HeartRateMonitor.parseHeartRate(byteArrayOf(0x00)))
+        assertEquals("180d", HeartRateMonitor.short(java.util.UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")))
+        assertEquals("abcdef01-0000-1000-8000-00805f9b34fc", HeartRateMonitor.short(java.util.UUID.fromString("abcdef01-0000-1000-8000-00805f9b34fc")))
+        assertTrue(HeartRateMonitor.looksLikeWearable("Google Fitbit Air") && HeartRateMonitor.looksLikeWearable("Polar H10"))
+        assertFalse(HeartRateMonitor.looksLikeWearable("JBL Tune 510BT") || HeartRateMonitor.looksLikeWearable(null))
     }
 
     @Test fun `intervall blokk tavval is megadhato, de csak egyfelekeppen`() {
