@@ -277,6 +277,17 @@ object StravaExercises {
         listOf("stretch") to "STRETCH",
     )
 
+    /** Melyik testtájat dolgoztatja a gyakorlat (a Strava-leíráshoz). */
+    fun area(id: String): String = when {
+        listOf("PLANK", "CRUNCH", "KNEE_RAISE", "LEG_RAISE", "SIT_UP", "RUSSIAN", "DEADBUG", "CORE", "HOLLOW", "V_UP", "TOES_TO_BAR", "AB_", "FLUTTER", "BIRD_DOG")
+            .any { it in id } -> "törzs"
+        listOf("SQUAT", "LUNGE", "DEADLIFT", "RDL", "CALF", "HIP", "GLUTE", "LEG_", "STEP_UP", "GOOD_MORNING", "NORDIC", "WALL_SIT", "QUAD", "BOX_JUMP")
+            .any { it in id } -> "láb"
+        listOf("PRESS", "PULL", "ROW", "CURL", "TRICEP", "LATERAL", "FLY", "FLYE", "PUSH_UP", "SHRUG", "DIP", "CHIN", "RAISE", "SKULL", "CROSSOVER", "MUSCLE_UP")
+            .any { it in id } -> "felsőtest"
+        else -> "egész test"
+    }
+
     /** A gyakorlat Strava-azonosítója: a megadott, ha érvényes; különben a név alapján; végső esetben általános. */
     fun of(name: String, explicit: String? = null): String {
         explicit?.uppercase()?.takeIf { it in ALL }?.let { return it }

@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -130,6 +132,7 @@ private suspend fun loadPoints(ctx: Context, a: Activity): List<TrackPoint> = ru
     }
 }.getOrDefault(emptyList())
 
+@OptIn(ExperimentalLayoutApi::class)
 /** Az edzés részletei teljes képernyőn: adatok, útvonal, tempó- és pulzusgörbe, zónaidők, részidők / sorozatok. */
 @Composable
 fun ActivityDialog(a: Activity, onDismiss: () -> Unit) {
@@ -224,11 +227,22 @@ fun ActivityDialog(a: Activity, onDismiss: () -> Unit) {
                 }
 
                 a.stravaError?.let { Text("Strava hiba: $it", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.error) }
+                ctx.prefs.getString("strength_err_${a.id}", null)?.let {
+                    Text(
+                        "A Strava nem fogadta el a sorozatokat (ezért nincs izomtérkép), sima edzésként került fel. Oka: $it",
+                        Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (a.stravaId != null && a.source == "app") Text(
+                    "Újrafeltöltéshez előbb töröld az edzést a Stravában, majd itt: „Strava-kapcsolat bontása”, és „Feltöltés Stravára”. " +
+                        "Ha a Stravában még megvan, az app nem tölti fel újra, hanem ahhoz kapcsolja.",
+                    Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
+                )
                 if (a.source != "app") Text(
                     "Törléskor csak ebből az appból tűnik el; a Stravában és a Health Connectben megmarad.",
                     Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall,
                 )
-                Row(Modifier.padding(top = 16.dp)) {
+                FlowRow(Modifier.padding(top = 16.dp)) {
                     when {
                         a.stravaId != null -> TextButton(onClick = {
                             ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.strava.com/activities/${a.stravaId}")))
@@ -240,6 +254,9 @@ fun ActivityDialog(a: Activity, onDismiss: () -> Unit) {
                             }
                         }) { Text(if (busy) "Feltöltés…" else "Feltöltés Stravára") }
                     }
+                    if (a.stravaId != null && a.source == "app") TextButton(onClick = {
+                        scope.launch { ctx.dao.update(a.copy(stravaId = null, stravaError = null)) }
+                    }) { Text("Strava-kapcsolat bontása") }
                     TextButton(onClick = {
                         onDismiss()
                         scope.launch {

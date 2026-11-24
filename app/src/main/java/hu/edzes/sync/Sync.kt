@@ -1,6 +1,7 @@
 package hu.edzes.sync
 
 import android.content.Context
+import androidx.core.content.edit
 import androidx.health.connect.client.records.ExerciseRoute
 import androidx.health.connect.client.records.ExerciseRouteResult
 import androidx.work.CoroutineWorker
@@ -202,15 +203,19 @@ object Sync {
             if (!force && a.source == "app" && hcOk && points.none { it.hr != null } && System.currentTimeMillis() - endMs < 30 * 60_000) return false
             a = a.copy(needsRoute = false)
             val logs = dao.setLogs(a.id)
-            val description = describe(logs)
+            // Erősítésnél a Stravára csak a testtájak kerülnek, a részletek (gyakorlatok, súlyok) az appban maradnak.
+            val description = if (isCardio(a.sport)) describe(logs) else strengthDescription(logs)
             val strava = Strava(ctx)
             val id = when {
                 // Súlyzós / HIIT sorozatokkal: a Strava saját erőedzés-nézetébe (sorozatok, izomtérkép).
                 !isCardio(a.sport) && strengthSets(logs).isNotEmpty() -> try {
                     strava.uploadFile(buildStrengthJson(a.startMs, a.durationS, a.calories, logs, points).toString(), "json", a, description)
+                        .also { ctx.prefs.edit { remove("strength_err_${a.id}") } }
                 } catch (e: StravaException) {
                     if (Strava.duplicateId(e.message.orEmpty()) != null) throw e
-                    strava.createManual(a, description)   // ha a sorozatos formátumot elutasítja, legalább az edzés felkerül
+                    // Ha a sorozatos formátumot elutasítja, legalább az edzés felkerül; az okot megjegyezzük és kiírjuk.
+                    ctx.prefs.edit { putString("strength_err_${a.id}", e.message) }
+                    strava.createManual(a, description)
                 }
                 points.isEmpty() -> strava.createManual(a, description)
                 else -> strava.uploadFile(buildTcx(a.sport, a.startMs, a.durationS, a.distanceM, a.calories, points), "tcx", a, description)

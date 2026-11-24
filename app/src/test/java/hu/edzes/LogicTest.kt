@@ -7,6 +7,7 @@ import hu.edzes.model.ProgramParser
 import hu.edzes.model.dates
 import hu.edzes.model.StravaExercises
 import hu.edzes.sync.buildStrengthJson
+import hu.edzes.sync.strengthDescription
 import hu.edzes.sync.remoteDuplicates
 import hu.edzes.model.Block
 import hu.edzes.model.Splits
@@ -361,6 +362,8 @@ class LogicTest {
 
     @Test fun `Strava erőedzés JSON`() {
         val start = java.time.Instant.parse("2026-11-19T07:00:00Z").toEpochMilli()
+        // tört másodperces kezdés: a JSON-ban egész másodpercre kerekítve
+        assertTrue("\"start_time\":\"2026-11-19T07:00:00Z\"" in buildStrengthJson(start + 639, 60, null, listOf(SetLog(activityId = 1, exercise = "Plank", durationS = 30)), emptyList()).toString())
         val logs = listOf(
             SetLog(activityId = 1, exercise = "Fekvenyomás", reps = 8, weightKg = 60.0),
             SetLog(activityId = 1, exercise = "Húzódzkodás", reps = 10),
@@ -378,6 +381,12 @@ class LogicTest {
             json,
         )
         assertEquals("HighIntensityIntervalTraining", hu.edzes.model.stravaType("hiit"))
+        assertEquals("Erősítő edzés – felsőtest, törzs", strengthDescription(logs))
+        assertEquals(
+            listOf("felsőtest", "felsőtest", "láb", "láb", "törzs", "törzs", "felsőtest", "egész test"),
+            listOf("PULL_UP_GENERIC", "DUMBBELL_ROW", "DUMBBELL_BULGARIAN_SPLIT_SQUATS", "SINGLE_LEG_ROMANIAN_DEADLIFTS",
+                "HANGING_LEG_RAISE", "SIDE_PLANK", "DUMBBELL_REAR_DELT_FLY", "BURPEE").map(StravaExercises::area),
+        )
     }
 
     @Test fun `dupla edzes felismerese a Stravaban`() {

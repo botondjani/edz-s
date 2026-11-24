@@ -11,6 +11,12 @@ import kotlinx.serialization.json.putJsonObject
 import java.time.Instant
 import java.time.ZoneId
 
+/** Rövid Strava-leírás erősítő edzéshez: csak a megdolgozott testtájak, gyakorlatok és súlyok nélkül. */
+fun strengthDescription(logs: List<SetLog>): String {
+    val areas = strengthSets(logs).map { StravaExercises.area(StravaExercises.of(it.exercise, it.strava)) }.distinct()
+    return "Erősítő edzés" + if (areas.isEmpty()) "" else " – " + areas.joinToString(", ")
+}
+
 /** A naplóból a Strava által sorozatként elfogadott tételek: ismétléses vagy időre végzett gyakorlatok (a kardió részidők nem). */
 fun strengthSets(logs: List<SetLog>) = logs.filter { it.distanceM == null && ((it.reps ?: 0) > 0 || (it.durationS ?: 0) > 0) }
 
@@ -21,7 +27,8 @@ fun strengthSets(logs: List<SetLog>) = logs.filter { it.distanceM == null && ((i
 fun buildStrengthJson(
     startMs: Long, durationS: Int, calories: Int?, logs: List<SetLog>, hr: List<TrackPoint>, zone: ZoneId = ZoneId.systemDefault(),
 ): JsonObject = buildJsonObject {
-    val start = Instant.ofEpochMilli(startMs)
+    // Másodpercre kerekítve: a tört másodperces időbélyeget a Strava nem mindig fogadja el.
+    val start = Instant.ofEpochMilli(startMs).truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
     put("version", "1.0")
     put("start_time", start.toString())
     put("utc_offset", zone.rules.getOffset(start).totalSeconds)
